@@ -1,6 +1,7 @@
 import collections
 import os
 import sys
+import threading
 import time
 
 import dm_env
@@ -11,8 +12,10 @@ sys.path.append("../../")
 
 root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 build_dir = os.path.join(root, "lib")
-if build_dir not in sys.path:
-    sys.path.insert(0, build_dir)
+proto_dir = os.path.join(build_dir, "proto")
+for sdk_path in (proto_dir, build_dir):
+    if sdk_path not in sys.path:
+        sys.path.insert(0, sdk_path)
 
 from lib_h1_sdk_python import ArmAction
 from lib_h1_sdk_python import EtherCAT_Motor_Index
@@ -20,11 +23,19 @@ from lib_h1_sdk_python import H1Robot
 from lib_h1_sdk_python import MotorControl
 from lib_h1_sdk_python import MotorControlMode
 from lib_h1_sdk_python import MotorInformation
+from camera_client import CameraClient
 
-from .camera_sdk import ImageRecorder
 
-
+GRPC_TARGET = "localhost:50051"
 DEFAULT_CAMERA_NAMES = ["cam_left_wrist", "cam_high", "cam_right_wrist"]
+
+
+def available_camera_names(client, timeout=5.0):
+    try:
+        state = client.get_state(timeout=timeout)
+    except Exception:
+        return None
+    return {config.camera_name for config in getattr(state, "camera_configs", [])}
 
 
 def camera_aliases(camera_name: str) -> list[str]:
@@ -63,6 +74,38 @@ def normalize_camera_images(images: dict, camera_names: list[str]) -> dict:
                 break
 
     return normalized
+
+
+class ImageRecorder:
+    def __init__(self, camera_names):
+        cli = CameraClient(grpc_target=GRPC_TARGET)
+        cli.start()
+
+        self.camera_names = camera_names
+        self.cli = cli
+        self.image_dict = {}
+
+        active_camera_names = camera_names
+        available_names = available_camera_names(cli)
+        if available_names:
+            active_camera_names = [name for name in camera_names if name in available_names]
+            if not active_camera_names:
+                active_camera_names = camera_names
+
+        for cam_name in active_camera_names:
+            threading.Thread(target=self.handler, args=(cam_name,), daemon=True).start()
+
+    def handler(self, cam_name):
+        while True:
+            item = None
+            while item is None:
+                item = self.cli.get_latest_frame(cam_name)
+                time.sleep(0.01)
+            bgr, _ = item
+            self.image_dict[cam_name] = bgr
+
+    def get_images(self):
+        return self.image_dict.copy()
 
 
 class Real_Env:
