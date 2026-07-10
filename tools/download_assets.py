@@ -20,14 +20,30 @@ Examples:
 """
 
 import argparse
+import getpass
+import os
+import stat
 import sys
 from pathlib import Path
+
+
+def get_cache_dir() -> Path:
+    """Get the cache directory for storing downloaded assets."""
+    _OPENPI_DATA_HOME = "OPENPI_DATA_HOME"
+    default_dir = "~/.cache/openpi"
+    if os.path.exists("/mnt/weka"):
+        default_dir = f"/mnt/weka/{getpass.getuser()}/.cache/openpi"
+
+    cache_dir = Path(os.getenv(_OPENPI_DATA_HOME, default_dir)).expanduser().resolve()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir.chmod(stat.S_IRWXU | stat.S_IRWXG | stat.S_IRWXO)
+    return cache_dir
 
 
 def download_asset(url: str, output_dir: str | None = None):
     """Download an asset from the given URL."""
     try:
-        from openpi.shared.download import maybe_download, get_cache_dir
+        from openpi.shared.download import maybe_download
     except ImportError:
         print(
             "Error: openpi.shared.download module not found. "
@@ -37,8 +53,6 @@ def download_asset(url: str, output_dir: str | None = None):
         sys.exit(1)
 
     if output_dir:
-        import os
-
         os.environ["OPENPI_DATA_HOME"] = output_dir
 
     local_path = maybe_download(url, force_download=False)
@@ -110,17 +124,13 @@ def main():
         sys.exit(1)
 
     if args.force:
-        import os
-
-        from openpi.shared.download import get_cache_dir
+        import shutil
+        import urllib.parse
 
         cache_dir = Path(args.output) if args.output else get_cache_dir()
         print(f"Clearing existing cache in: {cache_dir}")
-        import shutil
 
         for url in urls_to_download:
-            import urllib.parse
-
             parsed = urllib.parse.urlparse(url)
             local_path = cache_dir / parsed.netloc / parsed.path.strip("/")
             if local_path.exists():
