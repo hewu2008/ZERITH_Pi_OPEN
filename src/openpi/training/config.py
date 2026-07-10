@@ -358,7 +358,7 @@ _CONFIGS = [
         data=LeRobotZerithJointDataConfig(
             # LeRobot stores the converted dataset under <LEROBOT_HOME>/<repo_id>.
             # Keep this value aligned with train.sh REPO_ID and the dataset path used during conversion.
-            repo_id="hewu2008/lerobot_put_rectangular_block_on_the_box",
+            repo_id="hewu2008/pick_and_place_v1",
             assets=AssetsConfig(
                 # Normalization stats are loaded from <assets_dir>/<asset_id>/norm_stats.json.
                 # The asset_id can match repo_id, or point to another robot/task's stats when reusing assets.
