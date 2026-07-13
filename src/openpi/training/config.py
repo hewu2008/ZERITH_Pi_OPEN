@@ -363,7 +363,7 @@ _CONFIGS = [
                 # Normalization stats are loaded from <assets_dir>/<asset_id>/norm_stats.json.
                 # The asset_id can match repo_id, or point to another robot/task's stats when reusing assets.
                 assets_dir="./assets",
-                asset_id="zerith/test",
+                asset_id="hewu2008/pick_and_place_v1",
             ),
             base_config=DataConfig(
                 local_files_only=True,
