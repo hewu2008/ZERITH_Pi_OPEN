@@ -222,12 +222,14 @@ def main(config: _config.TrainConfig):
     )
     init_wandb(config, resuming=resuming, enabled=config.wandb_enabled)
 
+    logging.info(f"Creating data loader, num_workers={config.num_workers}...")
     data_loader = _data_loader.create_data_loader(
         config,
         sharding=data_sharding,
         num_workers=config.num_workers,
         shuffle=True,
     )
+    logging.info(f"Data loader created, loading first batch...")
     data_iter = iter(data_loader)
     batch = next(data_iter)
     logging.info(f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}")
