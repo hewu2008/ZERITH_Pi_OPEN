@@ -222,6 +222,14 @@ def main(config: _config.TrainConfig):
     )
     init_wandb(config, resuming=resuming, enabled=config.wandb_enabled)
 
+    logger.info(f"Initializing train state...")
+    train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
+    jax.block_until_ready(train_state)
+    logging.info(f"Initialized train state:\n{training_utils.array_tree_to_info(train_state.params)}")
+
+    if resuming:
+        train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
+
     logging.info(f"Creating data loader, num_workers={config.num_workers}...")
     data_loader = _data_loader.create_data_loader(
         config,
@@ -232,14 +240,7 @@ def main(config: _config.TrainConfig):
     logging.info(f"Data loader created, loading first batch...")
     data_iter = iter(data_loader)
     batch = next(data_iter)
-    logging.info(f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}")
-
-    train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
-    jax.block_until_ready(train_state)
-    logging.info(f"Initialized train state:\n{training_utils.array_tree_to_info(train_state.params)}")
-
-    if resuming:
-        train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
+    logging.info(f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}")   
 
     ptrain_step = jax.jit(
         functools.partial(train_step, config),
