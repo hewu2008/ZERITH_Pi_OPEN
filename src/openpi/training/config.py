@@ -371,6 +371,7 @@ _CONFIGS = [
             ),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("/home/jszn/hewu/model_zoo/pi0_base_params/pi0_base/params"),
+        save_interval=1000,
         num_train_steps=30000,
         freeze_filter=pi0.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
