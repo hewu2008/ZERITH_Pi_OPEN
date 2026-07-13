@@ -139,8 +139,21 @@ class HuggingFaceWeightLoader(WeightLoader):
             for key, value in pt_params.items():
                 if isinstance(value, torch.Tensor):
                     np_value = value.numpy()
+
+                    if key.startswith("paligemma_with_expert.gemma_expert."):
+                        key = key.replace("paligemma_with_expert.gemma_expert.", "PaliGemma/llm/")
+                    elif key.startswith("paligemma_with_expert.paligemma."):
+                        key = key.replace("paligemma_with_expert.paligemma.", "PaliGemma/llm/")
+                    elif key.startswith("paligemma_with_expert.siglip."):
+                        key = key.replace("paligemma_with_expert.siglip.", "PaliGemma/img/")
+
+                    key = key.replace(".weight", ".kernel")
+
                     if "." in key and "/" not in key:
                         key = key.replace(".", "/")
+                    else:
+                        key = key.replace(".", "/")
+
                     loaded_params[key] = np_value
 
             loaded_params = flax.traverse_util.unflatten_dict(loaded_params, sep="/")
