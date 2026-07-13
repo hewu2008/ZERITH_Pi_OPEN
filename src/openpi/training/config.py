@@ -370,7 +370,7 @@ _CONFIGS = [
                 prompt_from_task=True,
             ),
         ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("/home/jszn/hewu/model_zoo/pi0_base_params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/home/jszn/hewu/model_zoo/pi0_base_params/pi0_base/params"),
         num_train_steps=30000,
         freeze_filter=pi0.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
