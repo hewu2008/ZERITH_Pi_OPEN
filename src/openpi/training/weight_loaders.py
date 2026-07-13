@@ -79,10 +79,13 @@ class HuggingFaceWeightLoader(WeightLoader):
     """Loads weights from a local file or directory.
 
     This loader loads weights from local files and converts them to the OpenPI parameter format.
-    It supports both PyTorch (.bin) and SafeTensors (.safetensors) formats, as well as NumPy (.npz) format.
+    It supports:
+      - OpenPI checkpoint format (directory with params, loaded via restore_params)
+      - NumPy (.npz) format
+      - PyTorch (.bin) and SafeTensors (.safetensors) formats
 
     Args:
-        local_path: Local path to the weight file (.bin, .safetensors, .npz) or directory containing weights
+        local_path: Local path to the weight file (.bin, .safetensors, .npz) or checkpoint directory
         filename: Optional specific filename to load if local_path is a directory (if None, will auto-detect)
     """
 
@@ -90,15 +93,6 @@ class HuggingFaceWeightLoader(WeightLoader):
     filename: str | None = None
 
     def load(self, params: at.Params) -> at.Params:
-        try:
-            import torch
-            import safetensors
-        except ImportError as e:
-            raise ImportError(
-                "To use HuggingFaceWeightLoader, please install the required dependencies: "
-                "pip install torch safetensors"
-            ) from e
-
         local_path = Path(self.local_path).expanduser().resolve()
 
         if not local_path.exists():
@@ -117,16 +111,24 @@ class HuggingFaceWeightLoader(WeightLoader):
                         weight_path = candidates[0]
                         break
 
-        if weight_path is None or not weight_path.exists():
-            raise FileNotFoundError(f"No weight files found in {local_path}")
+        logger.info(f"Loading weights from: {weight_path if weight_path else local_path}")
 
-        logger.info(f"Loading weights from: {weight_path}")
-
-        if weight_path.suffix == ".npz":
+        if local_path.is_dir() and not weight_path:
+            loaded_params = _model.restore_params(str(local_path), restore_type=np.ndarray)
+        elif weight_path.suffix == ".npz":
             with weight_path.open("rb") as f:
                 flat_params = dict(np.load(f, allow_pickle=False))
             loaded_params = {"PaliGemma": flax.traverse_util.unflatten_dict(flat_params, sep="/")["params"]}
         else:
+            try:
+                import torch
+                import safetensors
+            except ImportError as e:
+                raise ImportError(
+                    "To load PyTorch/SafeTensors weights, please install: "
+                    "pip install torch safetensors"
+                ) from e
+
             if weight_path.suffix == ".safetensors":
                 import safetensors.torch
                 pt_params = safetensors.torch.load_file(str(weight_path), device="cpu")
@@ -137,11 +139,11 @@ class HuggingFaceWeightLoader(WeightLoader):
             for key, value in pt_params.items():
                 if isinstance(value, torch.Tensor):
                     np_value = value.numpy()
+                    if "." in key and "/" not in key:
+                        key = key.replace(".", "/")
                     loaded_params[key] = np_value
 
-            loaded_params = flax.traverse_util.unflatten_dict(
-                {k.replace(".", "/"): v for k, v in loaded_params.items()}, sep="/"
-            )
+            loaded_params = flax.traverse_util.unflatten_dict(loaded_params, sep="/")
 
         return _merge_params(loaded_params, params, missing_regex=".*lora.*")
 
