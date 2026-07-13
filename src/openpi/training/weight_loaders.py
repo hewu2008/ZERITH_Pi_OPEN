@@ -140,7 +140,7 @@ class HuggingFaceWeightLoader(WeightLoader):
                     loaded_params[key] = np_value
 
             loaded_params = flax.traverse_util.unflatten_dict(
-                {tuple(k.split("/")): v for k, v in loaded_params.items()}, sep="/"
+                {k.replace(".", "/"): v for k, v in loaded_params.items()}, sep="/"
             )
 
         return _merge_params(loaded_params, params, missing_regex=".*lora.*")
