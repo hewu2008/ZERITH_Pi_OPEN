@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0brobot.proto\x12\x05robot\"\xa5\x01\n\x14\x43ontrolSignalRequest\x12\x36\n\x06\x61\x63tion\x18\x01 \x01(\x0e\x32&.robot.ControlSignalRequest.ActionType\x12\x10\n\x08sdp_type\x18\x02 \x01(\t\x12\x0b\n\x03sdp\x18\x03 \x01(\t\"6\n\nActionType\x12\x0b\n\x07UNKNOWN\x10\x00\x12\x0b\n\x07\x43ONNECT\x10\x01\x12\x0e\n\nDISCONNECT\x10\x02\"F\n\x15\x43ontrolSignalResponse\x12\x0e\n\x06status\x18\x01 \x01(\t\x12\x10\n\x08sdp_type\x18\x02 \x01(\t\x12\x0b\n\x03sdp\x18\x03 \x01(\t\",\n\x14RecorderStateRequest\x12\x14\n\x0c\x63\x61mera_names\x18\x01 \x03(\t\"\xe7\x03\n\x15RecorderStateResponse\x12\x41\n\x0e\x63\x61mera_configs\x18\x01 \x03(\x0b\x32).robot.RecorderStateResponse.CameraConfig\x1a\x8a\x03\n\x0c\x43\x61meraConfig\x12\x13\n\x0b\x63\x61mera_name\x18\x01 \x01(\t\x12\x45\n\x07streams\x18\x02 \x03(\x0b\x32\x34.robot.RecorderStateResponse.CameraConfig.StreamSpec\x1a\x9d\x02\n\nStreamSpec\x12\x0c\n\x04type\x18\x01 \x01(\t\x12\r\n\x05width\x18\x02 \x01(\r\x12\x0e\n\x06height\x18\x03 \x01(\r\x12\x0b\n\x03\x66ps\x18\x04 \x01(\r\x12U\n\nintrinsics\x18\x05 \x01(\x0b\x32\x41.robot.RecorderStateResponse.CameraConfig.StreamSpec.RsIntrinsics\x1a~\n\x0cRsIntrinsics\x12\r\n\x05width\x18\x01 \x01(\r\x12\x0e\n\x06height\x18\x02 \x01(\r\x12\n\n\x02\x66x\x18\x03 \x01(\x02\x12\n\n\x02\x66y\x18\x04 \x01(\x02\x12\x0b\n\x03ppx\x18\x05 \x01(\x02\x12\x0b\n\x03ppy\x18\x06 \x01(\x02\x12\r\n\x05model\x18\x07 \x01(\t\x12\x0e\n\x06\x63oeffs\x18\x08 \x03(\x02\x32\xa8\x01\n\x0cRobotService\x12I\n\x0c\x43ontrolVideo\x12\x1b.robot.ControlSignalRequest\x1a\x1c.robot.ControlSignalResponse\x12M\n\x10GetRecorderState\x12\x1b.robot.RecorderStateRequest\x1a\x1c.robot.RecorderStateResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0brobot.proto\x12\x05robot\"\xbb\x01\n\x14\x43ontrolSignalRequest\x12\x36\n\x06\x61\x63tion\x18\x01 \x01(\x0e\x32&.robot.ControlSignalRequest.ActionType\x12\x10\n\x08sdp_type\x18\x02 \x01(\t\x12\x0b\n\x03sdp\x18\x03 \x01(\t\x12\x14\n\x0c\x65nable_depth\x18\x04 \x01(\x08\"6\n\nActionType\x12\x0b\n\x07UNKNOWN\x10\x00\x12\x0b\n\x07\x43ONNECT\x10\x01\x12\x0e\n\nDISCONNECT\x10\x02\"F\n\x15\x43ontrolSignalResponse\x12\x0e\n\x06status\x18\x01 \x01(\t\x12\x10\n\x08sdp_type\x18\x02 \x01(\t\x12\x0b\n\x03sdp\x18\x03 \x01(\t\",\n\x14RecorderStateRequest\x12\x14\n\x0c\x63\x61mera_names\x18\x01 \x03(\t\"\xe7\x03\n\x15RecorderStateResponse\x12\x41\n\x0e\x63\x61mera_configs\x18\x01 \x03(\x0b\x32).robot.RecorderStateResponse.CameraConfig\x1a\x8a\x03\n\x0c\x43\x61meraConfig\x12\x13\n\x0b\x63\x61mera_name\x18\x01 \x01(\t\x12\x45\n\x07streams\x18\x02 \x03(\x0b\x32\x34.robot.RecorderStateResponse.CameraConfig.StreamSpec\x1a\x9d\x02\n\nStreamSpec\x12\x0c\n\x04type\x18\x01 \x01(\t\x12\r\n\x05width\x18\x02 \x01(\r\x12\x0e\n\x06height\x18\x03 \x01(\r\x12\x0b\n\x03\x66ps\x18\x04 \x01(\r\x12U\n\nintrinsics\x18\x05 \x01(\x0b\x32\x41.robot.RecorderStateResponse.CameraConfig.StreamSpec.RsIntrinsics\x1a~\n\x0cRsIntrinsics\x12\r\n\x05width\x18\x01 \x01(\r\x12\x0e\n\x06height\x18\x02 \x01(\r\x12\n\n\x02\x66x\x18\x03 \x01(\x02\x12\n\n\x02\x66y\x18\x04 \x01(\x02\x12\x0b\n\x03ppx\x18\x05 \x01(\x02\x12\x0b\n\x03ppy\x18\x06 \x01(\x02\x12\r\n\x05model\x18\x07 \x01(\t\x12\x0e\n\x06\x63oeffs\x18\x08 \x03(\x02\x32\xa8\x01\n\x0cRobotService\x12I\n\x0c\x43ontrolVideo\x12\x1b.robot.ControlSignalRequest\x1a\x1c.robot.ControlSignalResponse\x12M\n\x10GetRecorderState\x12\x1b.robot.RecorderStateRequest\x1a\x1c.robot.RecorderStateResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,21 +32,21 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'robot_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
   _globals['_CONTROLSIGNALREQUEST']._serialized_start=23
-  _globals['_CONTROLSIGNALREQUEST']._serialized_end=188
-  _globals['_CONTROLSIGNALREQUEST_ACTIONTYPE']._serialized_start=134
-  _globals['_CONTROLSIGNALREQUEST_ACTIONTYPE']._serialized_end=188
-  _globals['_CONTROLSIGNALRESPONSE']._serialized_start=190
-  _globals['_CONTROLSIGNALRESPONSE']._serialized_end=260
-  _globals['_RECORDERSTATEREQUEST']._serialized_start=262
-  _globals['_RECORDERSTATEREQUEST']._serialized_end=306
-  _globals['_RECORDERSTATERESPONSE']._serialized_start=309
-  _globals['_RECORDERSTATERESPONSE']._serialized_end=796
-  _globals['_RECORDERSTATERESPONSE_CAMERACONFIG']._serialized_start=402
-  _globals['_RECORDERSTATERESPONSE_CAMERACONFIG']._serialized_end=796
-  _globals['_RECORDERSTATERESPONSE_CAMERACONFIG_STREAMSPEC']._serialized_start=511
-  _globals['_RECORDERSTATERESPONSE_CAMERACONFIG_STREAMSPEC']._serialized_end=796
-  _globals['_RECORDERSTATERESPONSE_CAMERACONFIG_STREAMSPEC_RSINTRINSICS']._serialized_start=670
-  _globals['_RECORDERSTATERESPONSE_CAMERACONFIG_STREAMSPEC_RSINTRINSICS']._serialized_end=796
-  _globals['_ROBOTSERVICE']._serialized_start=799
-  _globals['_ROBOTSERVICE']._serialized_end=967
+  _globals['_CONTROLSIGNALREQUEST']._serialized_end=210
+  _globals['_CONTROLSIGNALREQUEST_ACTIONTYPE']._serialized_start=156
+  _globals['_CONTROLSIGNALREQUEST_ACTIONTYPE']._serialized_end=210
+  _globals['_CONTROLSIGNALRESPONSE']._serialized_start=212
+  _globals['_CONTROLSIGNALRESPONSE']._serialized_end=282
+  _globals['_RECORDERSTATEREQUEST']._serialized_start=284
+  _globals['_RECORDERSTATEREQUEST']._serialized_end=328
+  _globals['_RECORDERSTATERESPONSE']._serialized_start=331
+  _globals['_RECORDERSTATERESPONSE']._serialized_end=818
+  _globals['_RECORDERSTATERESPONSE_CAMERACONFIG']._serialized_start=424
+  _globals['_RECORDERSTATERESPONSE_CAMERACONFIG']._serialized_end=818
+  _globals['_RECORDERSTATERESPONSE_CAMERACONFIG_STREAMSPEC']._serialized_start=533
+  _globals['_RECORDERSTATERESPONSE_CAMERACONFIG_STREAMSPEC']._serialized_end=818
+  _globals['_RECORDERSTATERESPONSE_CAMERACONFIG_STREAMSPEC_RSINTRINSICS']._serialized_start=692
+  _globals['_RECORDERSTATERESPONSE_CAMERACONFIG_STREAMSPEC_RSINTRINSICS']._serialized_end=818
+  _globals['_ROBOTSERVICE']._serialized_start=821
+  _globals['_ROBOTSERVICE']._serialized_end=989
 # @@protoc_insertion_point(module_scope)
