@@ -20,9 +20,9 @@ for sdk_path in (proto_dir, build_dir):
 from lib_h1_sdk_python import ArmAction
 from lib_h1_sdk_python import EtherCAT_Motor_Index
 from lib_h1_sdk_python import H1Robot
-from lib_h1_sdk_python import MotorControl
+from lib_h1_sdk_python import Motor_Control
 from lib_h1_sdk_python import MotorControlMode
-from lib_h1_sdk_python import MotorInformation
+from lib_h1_sdk_python import Motor_Information
 from camera_client import CameraClient
 
 
@@ -311,7 +311,7 @@ class Real_Env:
 
     def send_motor(self, idx, pos=None, speed=None, torque=None):
         """Send a low-level motor command. Position is used for joints; speed is used for chassis wheels."""
-        mc = MotorControl()
+        mc = Motor_Control()
         if pos is not None:
             mc.Position = pos
         if speed is not None:
@@ -327,7 +327,7 @@ class Real_Env:
         m = self.robot.getMotorState
         try:
             ret = m(idx)
-            if isinstance(ret, MotorInformation):
+            if isinstance(ret, Motor_Information):
                 return ret
             if isinstance(ret, (list, tuple)):
                 try:
@@ -338,9 +338,9 @@ class Real_Env:
         except TypeError:
             pass
         try:
-            out = MotorInformation()
+            out = Motor_Information()
             ok = m(idx, out)
-            if isinstance(ok, MotorInformation):
+            if isinstance(ok, Motor_Information):
                 return ok
             return out
         except TypeError:
