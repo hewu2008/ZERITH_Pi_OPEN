@@ -38,7 +38,7 @@ def init_logging():
             return super().format(record)
 
     formatter = CustomFormatter(
-        fmt="%(asctime)s.%(msecs)03d [%(levelname)s] %(message)-80s (%(process)d:%(filename)s:%(lineno)s)",
+        fmt="%(asctime)s.%(msecs)03d [%(levelname)s] %(filename)s:%(lineno)s %(message)-80s",
         datefmt="%H:%M:%S",
     )
 

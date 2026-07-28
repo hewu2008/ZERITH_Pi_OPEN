@@ -3,6 +3,7 @@
 LOG_DIR="logs"
 
 export LEROBOT_HOME=/home/jszn/hewu/dataset/
+export PYTHONUNBUFFERED=1
 
 mkdir -p "$LOG_DIR"
 
