@@ -1,7 +1,6 @@
 import dataclasses
 import logging
 import re
-from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 import flax.traverse_util
@@ -43,7 +42,7 @@ class CheckpointWeightLoader(WeightLoader):
       trained checkpoints:
         example: "./checkpoints/<config>/<exp>/<step>/params"
       released checkpoints:
-        example: "s3://openpi-assets/checkpoints/<model>/params"
+        example: "gs://openpi-assets/checkpoints/<model>/params"
     """
 
     params_path: str
@@ -74,93 +73,6 @@ class PaliGemmaWeightLoader(WeightLoader):
         return _merge_params(loaded_params, params, missing_regex=".*")
 
 
-@dataclasses.dataclass(frozen=True)
-class HuggingFaceWeightLoader(WeightLoader):
-    """Loads weights from a local file or directory.
-
-    This loader loads weights from local files and converts them to the OpenPI parameter format.
-    It supports:
-      - OpenPI checkpoint format (directory with params, loaded via restore_params)
-      - NumPy (.npz) format
-      - PyTorch (.bin) and SafeTensors (.safetensors) formats
-
-    Args:
-        local_path: Local path to the weight file (.bin, .safetensors, .npz) or checkpoint directory
-        filename: Optional specific filename to load if local_path is a directory (if None, will auto-detect)
-    """
-
-    local_path: str
-    filename: str | None = None
-
-    def load(self, params: at.Params) -> at.Params:
-        local_path = Path(self.local_path).expanduser().resolve()
-
-        if not local_path.exists():
-            raise FileNotFoundError(f"Local path does not exist: {local_path}")
-
-        if local_path.is_file():
-            weight_path = local_path
-        else:
-            if self.filename:
-                weight_path = local_path / self.filename
-            else:
-                weight_path = None
-                for ext in ["safetensors", "bin", "npz"]:
-                    candidates = list(local_path.glob(f"*.{ext}"))
-                    if candidates:
-                        weight_path = candidates[0]
-                        break
-
-        logger.info(f"Loading weights from: {weight_path if weight_path else local_path}")
-
-        if local_path.is_dir() and not weight_path:
-            loaded_params = _model.restore_params(str(local_path), restore_type=np.ndarray)
-        elif weight_path.suffix == ".npz":
-            with weight_path.open("rb") as f:
-                flat_params = dict(np.load(f, allow_pickle=False))
-            loaded_params = {"PaliGemma": flax.traverse_util.unflatten_dict(flat_params, sep="/")["params"]}
-        else:
-            try:
-                import torch
-                import safetensors
-            except ImportError as e:
-                raise ImportError(
-                    "To load PyTorch/SafeTensors weights, please install: "
-                    "pip install torch safetensors"
-                ) from e
-
-            if weight_path.suffix == ".safetensors":
-                import safetensors.torch
-                pt_params = safetensors.torch.load_file(str(weight_path), device="cpu")
-            else:
-                pt_params = torch.load(str(weight_path), map_location="cpu", weights_only=True)
-
-            loaded_params = {}
-            for key, value in pt_params.items():
-                if isinstance(value, torch.Tensor):
-                    np_value = value.numpy()
-
-                    if key.startswith("paligemma_with_expert.gemma_expert."):
-                        key = key.replace("paligemma_with_expert.gemma_expert.", "PaliGemma/llm/")
-                    elif key.startswith("paligemma_with_expert.paligemma."):
-                        key = key.replace("paligemma_with_expert.paligemma.", "PaliGemma/llm/")
-                    elif key.startswith("paligemma_with_expert.siglip."):
-                        key = key.replace("paligemma_with_expert.siglip.", "PaliGemma/img/")
-
-                    key = key.replace(".weight", ".kernel")
-
-                    if "." in key and "/" not in key:
-                        key = key.replace(".", "/")
-                    else:
-                        key = key.replace(".", "/")
-
-                    loaded_params[key] = np_value
-
-            loaded_params = flax.traverse_util.unflatten_dict(loaded_params, sep="/")
-
-        return _merge_params(loaded_params, params, missing_regex=".*lora.*")
-
-
 def _merge_params(loaded_params: at.Params, params: at.Params, *, missing_regex: str) -> at.Params:
     """Merges the loaded parameters with the reference parameters.
 
@@ -179,7 +91,9 @@ def _merge_params(loaded_params: at.Params, params: at.Params, *, missing_regex:
     result = {}
     for k, v in flat_loaded.items():
         if k in flat_ref:
-            result[k] = v.astype(flat_ref[k].dtype)
+            result[k] = v.astype(flat_ref[k].dtype) if v.dtype != flat_ref[k].dtype else v
+
+    flat_loaded.clear()
 
     # Then, merge any missing weights as defined by the missing regex.
     pattern = re.compile(missing_regex)

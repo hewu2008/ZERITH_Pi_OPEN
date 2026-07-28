@@ -2,13 +2,13 @@ import dataclasses
 
 import jax
 
-from openpi.models import pi0
+from openpi.models import pi0_config
 from openpi.training import config as _config
 from openpi.training import data_loader as _data_loader
 
 
 def test_torch_data_loader():
-    config = pi0.Pi0Config(action_dim=24, action_horizon=50, max_token_len=48)
+    config = pi0_config.Pi0Config(action_dim=24, action_horizon=50, max_token_len=48)
     dataset = _data_loader.FakeDataset(config, 16)
 
     loader = _data_loader.TorchDataLoader(
@@ -24,7 +24,7 @@ def test_torch_data_loader():
 
 
 def test_torch_data_loader_infinite():
-    config = pi0.Pi0Config(action_dim=24, action_horizon=50, max_token_len=48)
+    config = pi0_config.Pi0Config(action_dim=24, action_horizon=50, max_token_len=48)
     dataset = _data_loader.FakeDataset(config, 4)
 
     loader = _data_loader.TorchDataLoader(dataset, local_batch_size=4)
@@ -35,7 +35,7 @@ def test_torch_data_loader_infinite():
 
 
 def test_torch_data_loader_parallel():
-    config = pi0.Pi0Config(action_dim=24, action_horizon=50, max_token_len=48)
+    config = pi0_config.Pi0Config(action_dim=24, action_horizon=50, max_token_len=48)
     dataset = _data_loader.FakeDataset(config, 10)
 
     loader = _data_loader.TorchDataLoader(dataset, local_batch_size=4, num_batches=2, num_workers=2)
@@ -48,7 +48,7 @@ def test_torch_data_loader_parallel():
 
 
 def test_with_fake_dataset():
-    config = _config.get_config("test")
+    config = _config.get_config("debug")
 
     loader = _data_loader.create_data_loader(config, skip_norm_stats=True, num_batches=2)
     batches = list(loader)
@@ -63,7 +63,7 @@ def test_with_fake_dataset():
 
 
 def test_with_real_dataset():
-    config = _config.get_config("test")
+    config = _config.get_config("pi0_aloha_sim")
     config = dataclasses.replace(config, batch_size=4)
 
     loader = _data_loader.create_data_loader(

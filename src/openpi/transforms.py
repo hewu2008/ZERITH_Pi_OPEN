@@ -1,7 +1,7 @@
 from collections.abc import Callable, Mapping, Sequence
 import dataclasses
 import re
-from typing import Any, Protocol, TypeAlias, TypeVar, runtime_checkable
+from typing import Protocol, TypeAlias, TypeVar, runtime_checkable
 
 import flax.traverse_util as traverse_util
 import jax
@@ -102,38 +102,6 @@ class RepackTransform(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
-class RepackTransformWithFallback(DataTransformFn):
-    """Repacks an input dictionary, allowing each leaf to provide fallback keys.
-
-    Leaf values can be:
-    - a string: a single source key
-    - a sequence of strings: first existing key will be used
-    """
-
-    structure: at.PyTree[Any]
-
-    def __call__(self, data: DataDict) -> DataDict:
-        flat_item = flatten_dict(data)
-        return self._resolve(self.structure, flat_item)
-
-    def _resolve(self, node: Any, flat_item: dict[str, Any]) -> Any:
-        if isinstance(node, dict):
-            return {k: self._resolve(v, flat_item) for k, v in node.items()}
-        if isinstance(node, tuple):
-            return tuple(self._resolve(v, flat_item) for v in node)
-        if isinstance(node, list):
-            if not node:
-                raise KeyError("Empty fallback candidate list is not allowed")
-            for candidate in node:
-                if candidate in flat_item:
-                    return flat_item[candidate]
-            raise KeyError(f"None of fallback keys exist: {node}")
-        if isinstance(node, str):
-            return flat_item[node]
-        raise TypeError(f"Unsupported structure leaf type: {type(node)}")
-
-
-@dataclasses.dataclass(frozen=True)
 class InjectDefaultPrompt(DataTransformFn):
     prompt: str | None
 
@@ -167,12 +135,14 @@ class Normalize(DataTransformFn):
         )
 
     def _normalize(self, x, stats: NormStats):
-        return (x - stats.mean) / (stats.std + 1e-6)
+        mean, std = stats.mean[..., : x.shape[-1]], stats.std[..., : x.shape[-1]]
+        return (x - mean) / (std + 1e-6)
 
     def _normalize_quantile(self, x, stats: NormStats):
         assert stats.q01 is not None
         assert stats.q99 is not None
-        return (x - stats.q01) / (stats.q99 - stats.q01 + 1e-6) * 2.0 - 1.0
+        q01, q99 = stats.q01[..., : x.shape[-1]], stats.q99[..., : x.shape[-1]]
+        return (x - q01) / (q99 - q01 + 1e-6) * 2.0 - 1.0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -198,12 +168,17 @@ class Unnormalize(DataTransformFn):
         )
 
     def _unnormalize(self, x, stats: NormStats):
-        return x * (stats.std + 1e-6) + stats.mean
+        mean = pad_to_dim(stats.mean, x.shape[-1], axis=-1, value=0.0)
+        std = pad_to_dim(stats.std, x.shape[-1], axis=-1, value=1.0)
+        return x * (std + 1e-6) + mean
 
     def _unnormalize_quantile(self, x, stats: NormStats):
         assert stats.q01 is not None
         assert stats.q99 is not None
-        return (x + 1.0) / 2.0 * (stats.q99 - stats.q01 + 1e-6) + stats.q01
+        q01, q99 = stats.q01, stats.q99
+        if (dim := q01.shape[-1]) < x.shape[-1]:
+            return np.concatenate([(x[..., :dim] + 1.0) / 2.0 * (q99 - q01 + 1e-6) + q01, x[..., dim:]], axis=-1)
+        return (x + 1.0) / 2.0 * (q99 - q01 + 1e-6) + q01
 
 
 @dataclasses.dataclass(frozen=True)
@@ -272,15 +247,22 @@ class AbsoluteActions(DataTransformFn):
 @dataclasses.dataclass(frozen=True)
 class TokenizePrompt(DataTransformFn):
     tokenizer: _tokenizer.PaligemmaTokenizer
+    discrete_state_input: bool = False
 
     def __call__(self, data: DataDict) -> DataDict:
         if (prompt := data.pop("prompt", None)) is None:
             raise ValueError("Prompt is required")
 
+        if self.discrete_state_input:
+            if (state := data.get("state", None)) is None:
+                raise ValueError("State is required.")
+        else:
+            state = None
+
         if not isinstance(prompt, str):
             prompt = prompt.item()
 
-        tokens, token_masks = self.tokenizer.tokenize(prompt)
+        tokens, token_masks = self.tokenizer.tokenize(prompt, state)
         return {**data, "tokenized_prompt": tokens, "tokenized_prompt_mask": token_masks}
 
 
@@ -340,6 +322,19 @@ class PromptFromLeRobotTask(DataTransformFn):
             raise ValueError(f"{task_index=} not found in task mapping: {self.tasks}")
 
         return {**data, "prompt": prompt}
+
+
+@dataclasses.dataclass(frozen=True)
+class PadStatesAndActions(DataTransformFn):
+    """Zero-pads states and actions to the model action dimension."""
+
+    model_action_dim: int
+
+    def __call__(self, data: DataDict) -> DataDict:
+        data["state"] = pad_to_dim(data["state"], self.model_action_dim, axis=-1)
+        if "actions" in data:
+            data["actions"] = pad_to_dim(data["actions"], self.model_action_dim, axis=-1)
+        return data
 
 
 def flatten_dict(tree: at.PyTree) -> dict:
@@ -425,13 +420,13 @@ def apply_tree(
     return unflatten_dict({k: transform(k, v) for k, v in tree.items()})
 
 
-def pad_to_dim(x: np.ndarray, target_dim: int, axis: int = -1) -> np.ndarray:
+def pad_to_dim(x: np.ndarray, target_dim: int, axis: int = -1, value: float = 0.0) -> np.ndarray:
     """Pad an array to the target dimension with zeros along the specified axis."""
     current_dim = x.shape[axis]
     if current_dim < target_dim:
         pad_width = [(0, 0)] * len(x.shape)
         pad_width[axis] = (0, target_dim - current_dim)
-        return np.pad(x, pad_width)
+        return np.pad(x, pad_width, constant_values=value)
     return x
 
 
