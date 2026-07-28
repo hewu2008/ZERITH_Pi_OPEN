@@ -687,10 +687,12 @@ _CONFIGS = [
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             paligemma_variant="gemma_2b_lora", 
-            action_expert_variant="gemma_300m_lora"
+            action_expert_variant="gemma_300m_lora", 
+            action_horizon=10, 
+            discrete_state_input=False
         ).get_freeze_filter(),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-        ema_decay=0.999,
+        ema_decay=None,
     ),
 
     #
