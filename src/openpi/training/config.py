@@ -241,6 +241,7 @@ def _build_multi_camera_repack_transform() -> _transforms.Group:
                     },
                     "state": "observation.state",
                     "actions": "action",
+                    "prompt": "prompt",
                 }
             )
         ]
