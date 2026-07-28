@@ -591,6 +591,37 @@ class TrainConfig:
 
 # Use `get_config` if you need to get a config by name in your code.
 _CONFIGS = [
+    TrainConfig(
+        # This name is used by compute_norm_stats.py, train.py, and serve_policy.py.
+        name="pi0_zerith",
+        model=pi0.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"),
+        data=LeRobotZerithJointDataConfig(
+            # LeRobot stores the converted dataset under <LEROBOT_HOME>/<repo_id>.
+            # Keep this value aligned with train.sh REPO_ID and the dataset path used during conversion.
+            repo_id="hewu2008/pick_and_place_v2",
+            assets=AssetsConfig(
+                # Normalization stats are loaded from <assets_dir>/<asset_id>/norm_stats.json.
+                # The asset_id can match repo_id, or point to another robot/task's stats when reusing assets.
+                assets_dir="./assets",
+                asset_id="hewu2008/pick_and_place_v2",
+            ),
+            base_config=DataConfig(
+                local_files_only=True,
+                prompt_from_task=True,
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/home/jszn/hewu/model_zoo/pi0_base_params/pi0_base/params"),
+        save_interval=1000,
+        num_train_steps=30000,
+        freeze_filter=pi0.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
+        ).get_freeze_filter(),
+        ema_decay=None,
+        # Checkpoints are saved to <checkpoint_base_dir>/<config name>/<exp_name>/.
+        checkpoint_base_dir="./openpi_checkpoints",
+        batch_size=8,
+    ),
+
     #
     # Inference Aloha configs.
     #
