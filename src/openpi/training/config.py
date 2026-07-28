@@ -235,22 +235,12 @@ def _build_multi_camera_repack_transform() -> _transforms.Group:
             _transforms.RepackTransform(
                 {
                     "images": {
-                        "cam_high": [
-                            "observation.images.cam_high",
-                            "observation.images.rs.cam_high",
-                        ],
-                        "cam_left_wrist": [
-                            "observation.images.cam_left_wrist",
-                            "observation.images.rs.cam_left_wrist",
-                        ],
-                        "cam_right_wrist": [
-                            "observation.images.cam_right_wrist",
-                            "observation.images.rs.cam_right_wrist",
-                        ],
+                        "cam_high": "observation.images.cam_high",
+                        "cam_left_wrist": "observation.images.cam_left_wrist",
+                        "cam_right_wrist": "observation.images.cam_right_wrist",
                     },
                     "state": "observation.state",
                     "actions": "action",
-                    "prompt": "prompt",
                 }
             )
         ]
@@ -273,6 +263,9 @@ class LeRobotZerithJointDataConfig(DataConfigFactory):
             outputs=[zerith_joint_policy.MobilearxOutputs()],
         )
 
+        # Action keys that will be used to read the action sequence from the dataset.
+        action_sequence_keys: Sequence[str] = ("action",)
+
         delta_action_mask = _transforms.make_bool_mask(7, -1, 7, -1, 5, -2)
         data_transforms = data_transforms.push(
             inputs=[_transforms.DeltaActions(delta_action_mask)],
@@ -286,6 +279,7 @@ class LeRobotZerithJointDataConfig(DataConfigFactory):
             repack_transforms=repack_transform,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
+            action_sequence_keys=action_sequence_keys,
         )
 
 
