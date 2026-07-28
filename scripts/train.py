@@ -248,6 +248,7 @@ def main(config: _config.TrainConfig):
     )
 
     start_step = int(train_state.step)
+    lr_schedule_fn = config.lr_schedule.create()
     pbar = tqdm.tqdm(
         range(start_step, config.num_train_steps),
         initial=start_step,
@@ -263,6 +264,7 @@ def main(config: _config.TrainConfig):
         if step % config.log_interval == 0:
             stacked_infos = common_utils.stack_forest(infos)
             reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
+            reduced_info["lr"] = float(lr_schedule_fn(step))
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
             wandb.log(reduced_info, step=step)
