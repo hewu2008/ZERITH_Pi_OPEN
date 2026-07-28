@@ -637,6 +637,7 @@ _CONFIGS = [
             ),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("/home/jszn/hewu/model_zoo/pi0_base_params/pi0_base/params"),
+        log_interval=10,
         save_interval=1000,
         num_train_steps=30000,
         freeze_filter=pi0_config.Pi0Config(
