@@ -175,6 +175,9 @@ class DataConfigFactory(abc.ABC):
     assets: AssetsConfig = dataclasses.field(default_factory=AssetsConfig)
     # Base config that will be updated by the factory.
     base_config: tyro.conf.Suppress[DataConfig | None] = None
+    # If set, overrides the default use_quantile_norm behavior.
+    # If None, will use quantile norm for pi05 and standard norm for pi0.
+    use_quantile_norm: bool | None = None
 
     @abc.abstractmethod
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -183,12 +186,13 @@ class DataConfigFactory(abc.ABC):
     def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         repo_id = self.repo_id if self.repo_id is not tyro.MISSING else None
         asset_id = self.assets.asset_id or repo_id
+        use_quantile_norm = self.use_quantile_norm if self.use_quantile_norm is not None else (model_config.model_type != ModelType.PI0)
         return dataclasses.replace(
             self.base_config or DataConfig(),
             repo_id=repo_id,
             asset_id=asset_id,
             norm_stats=self._load_norm_stats(epath.Path(self.assets.assets_dir or assets_dirs), asset_id),
-            use_quantile_norm=model_config.model_type != ModelType.PI0,
+            use_quantile_norm=use_quantile_norm,
         )
 
     def _load_norm_stats(self, assets_dir: epath.Path, asset_id: str | None) -> dict[str, _transforms.NormStats] | None:
@@ -635,6 +639,7 @@ _CONFIGS = [
                 local_files_only=True,
                 prompt_from_task=True,
             ),
+            use_quantile_norm=False,
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("/home/jszn/hewu/model_zoo/pi0_base_params/pi0_base/params"),
         log_interval=10,
@@ -672,6 +677,7 @@ _CONFIGS = [
                 local_files_only=True,
                 prompt_from_task=True,
             ),
+            use_quantile_norm=False,
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=1000,
