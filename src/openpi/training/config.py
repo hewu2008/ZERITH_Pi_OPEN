@@ -594,7 +594,7 @@ _CONFIGS = [
     TrainConfig(
         # This name is used by compute_norm_stats.py, train.py, and serve_policy.py.
         name="pi0_zerith",
-        model=pi0.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"),
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"),
         data=LeRobotZerithJointDataConfig(
             # LeRobot stores the converted dataset under <LEROBOT_HOME>/<repo_id>.
             # Keep this value aligned with train.sh REPO_ID and the dataset path used during conversion.
@@ -606,14 +606,13 @@ _CONFIGS = [
                 asset_id="hewu2008/pick_and_place_v2",
             ),
             base_config=DataConfig(
-                local_files_only=True,
                 prompt_from_task=True,
             ),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("/home/jszn/hewu/model_zoo/pi0_base_params/pi0_base/params"),
         save_interval=1000,
         num_train_steps=30000,
-        freeze_filter=pi0.Pi0Config(
+        freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
         ema_decay=None,
