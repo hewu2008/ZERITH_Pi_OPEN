@@ -91,6 +91,9 @@ class DataConfig:
     # If true, will use the LeRobot dataset task to define the prompt.
     prompt_from_task: bool = False
 
+    # If true, will disable syncing the dataset from the Hugging Face Hub. Allows training on local-only datasets.
+    local_files_only: bool = False
+
     # Only used for RLDS data loader (ie currently only used for DROID).
     rlds_data_dir: str | None = None
     # Action space for DROID dataset.
@@ -226,6 +229,34 @@ class SimpleDataConfig(DataConfigFactory):
         )
 
 
+def _build_multi_camera_repack_transform() -> _transforms.Group:
+    return _transforms.Group(
+        inputs=[
+            _transforms.RepackTransform(
+                {
+                    "images": {
+                        "cam_high": [
+                            "observation.images.cam_high",
+                            "observation.images.rs.cam_high",
+                        ],
+                        "cam_left_wrist": [
+                            "observation.images.cam_left_wrist",
+                            "observation.images.rs.cam_left_wrist",
+                        ],
+                        "cam_right_wrist": [
+                            "observation.images.cam_right_wrist",
+                            "observation.images.rs.cam_right_wrist",
+                        ],
+                    },
+                    "state": "observation.state",
+                    "actions": "action",
+                    "prompt": "prompt",
+                }
+            )
+        ]
+    )
+
+
 @dataclasses.dataclass(frozen=True)
 class LeRobotZerithJointDataConfig(DataConfigFactory):
     """
@@ -251,7 +282,7 @@ class LeRobotZerithJointDataConfig(DataConfigFactory):
         model_transforms = ModelTransformFactory(default_prompt='')(model_config)
 
         return dataclasses.replace(
-            self.create_base_config(assets_dirs),
+            self.create_base_config(assets_dirs, model_config),
             repack_transforms=repack_transform,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
@@ -606,6 +637,7 @@ _CONFIGS = [
                 asset_id="hewu2008/pick_and_place_v2",
             ),
             base_config=DataConfig(
+                local_files_only=True,
                 prompt_from_task=True,
             ),
         ),
