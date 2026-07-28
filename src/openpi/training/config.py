@@ -679,7 +679,7 @@ _CONFIGS = [
             decay_steps=30000,
             decay_lr=1e-6,
         ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/home/jszn/hewu/model_zoo/pi05_base_params/params"),
         batch_size=8,
         log_interval=10,
         save_interval=1000,
