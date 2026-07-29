@@ -201,22 +201,22 @@ def main(
         repo_id = data_path
         root = None
 
-    dataset_meta = LeRobotDatasetMetadata(repo_id, root=root)
+    dataset_meta = LeRobotDatasetMetadata(repo_id, root=root, local_files_only=True)
     fps = dataset_meta.fps
     logging.info("Dataset FPS: %d", fps)
 
     delta_timestamps = {"action": [t / fps for t in range(action_horizon)]}
-    dataset = LeRobotDataset(repo_id, root=root, delta_timestamps=delta_timestamps)
+    dataset = LeRobotDataset(repo_id, root=root, delta_timestamps=delta_timestamps, local_files_only=True)
     logging.info("Dataset length: %d", len(dataset))
     logging.info("Running evaluation on trajectories: %s", traj_ids)
 
     all_mse = []
     all_mae = []
 
+    num_episodes = dataset.num_episodes
     for traj_id in traj_ids:
-        valid_episode_ids = list(dataset.meta.episodes.keys())
-        if traj_id not in valid_episode_ids:
-            logging.warning("Trajectory ID %d is out of range. Skipping.", traj_id)
+        if traj_id < 0 or traj_id >= num_episodes:
+            logging.warning("Trajectory ID %d is out of range [0, %d). Skipping.", traj_id, num_episodes)
             continue
 
         logging.info("Running trajectory: %d", traj_id)

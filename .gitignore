@@ -28,3 +28,6 @@ __pycache__/
 
 # ===== tools =====
 linux-bcecmd-*/
+
+# open loop test
+open_loop_test/
