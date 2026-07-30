@@ -233,7 +233,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_steps", type=int, default=20000, help="number of control steps")
     parser.add_argument("--warmup_steps", type=int, default=10, help="number of warmup inference calls")
     parser.add_argument("--init_hdf5", type=str, required=True, help="optional HDF5 file used for initialization")
-    parser.add_argument("--init_frame_idx", type=int, default=30, help="frame index used from the initialization HDF5")
+    parser.add_argument("--init_frame_idx", type=int, default=0, help="frame index used from the initialization HDF5")
     parser.add_argument(
         "--camera_names",
         nargs="+",
