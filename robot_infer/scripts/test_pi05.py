@@ -211,9 +211,9 @@ def main(args):
         action = np.copy(action_smooth.get_action(observation))
         observation = env.get_observation().observation
 
-        if action[7] > 0.4:
+        if action[7] > 0.35:
             action[7] = 1.3
-        if action[15] > 0.4:
+        if action[15] > 0.35:
             action[15] = 1.3
 
         if data_action is not None:
