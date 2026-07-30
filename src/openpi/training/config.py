@@ -679,8 +679,11 @@ _CONFIGS = [
             ),
             use_quantile_norm=False,
         ),
-        lr_schedule=_optimizer.FixedSchedule(
-            lr=5e-5,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=0,
+            peak_lr=5e-5,
+            decay_steps=30000,
+            decay_lr=5e-5,
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("/home/jszn/hewu/model_zoo/pi05_base_params/params"),
         batch_size=8,
