@@ -53,6 +53,16 @@ class RsqrtDecaySchedule(LRScheduleConfig):
         )
 
 
+@dataclasses.dataclass(frozen=True)
+class FixedSchedule(LRScheduleConfig):
+    """Fixed (constant) learning rate schedule, no warmup or decay."""
+
+    lr: float = 5e-5
+
+    def create(self) -> optax.Schedule:
+        return optax.constant_schedule(self.lr)
+
+
 @runtime_checkable
 class OptimizerConfig(Protocol):
     def create(
