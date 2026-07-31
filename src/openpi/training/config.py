@@ -666,7 +666,7 @@ _CONFIGS = [
         data=LeRobotZerithJointDataConfig(
             # LeRobot stores the converted dataset under <LEROBOT_HOME>/<repo_id>.
             # Keep this value aligned with train.sh REPO_ID and the dataset path used during conversion.
-            repo_id="hewu2008/clear_bin_box_sanity",
+            repo_id="hewu2008/clear_bin_box_sanity_v2",
             assets=AssetsConfig(
                 # Normalization stats are loaded from <assets_dir>/<asset_id>/norm_stats.json.
                 # The asset_id can match repo_id, or point to another robot/task's stats when reusing assets.
