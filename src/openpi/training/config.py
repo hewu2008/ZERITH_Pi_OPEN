@@ -707,7 +707,7 @@ _CONFIGS = [
             pi05=True, 
             paligemma_variant="gemma_2b_lora", 
             action_expert_variant="gemma_300m_lora", 
-            action_horizon=10, 
+            action_horizon=30, 
             discrete_state_input=False
         ),
         data=LeRobotZerithJointDataConfig(
@@ -728,12 +728,12 @@ _CONFIGS = [
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=1000,
-            peak_lr=5e-5,
+            peak_lr=1e-4,
             decay_steps=30000,
-            decay_lr=1e-6,
+            decay_lr=5e-6,
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("/home/jszn/hewu/model_zoo/pi05_base_params/params"),
-        batch_size=8,
+        batch_size=16,
         log_interval=10,
         save_interval=1000,
         num_train_steps=30000,
@@ -741,7 +741,7 @@ _CONFIGS = [
             pi05=True,
             paligemma_variant="gemma_2b_lora", 
             action_expert_variant="gemma_300m_lora", 
-            action_horizon=10, 
+            action_horizon=30, 
             discrete_state_input=False
         ).get_freeze_filter(),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
