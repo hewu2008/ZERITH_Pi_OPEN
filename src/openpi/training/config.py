@@ -660,7 +660,7 @@ _CONFIGS = [
             pi05=True, 
             paligemma_variant="gemma_2b_lora", 
             action_expert_variant="gemma_300m_lora", 
-            action_horizon=10, 
+            action_horizon=30, 
             discrete_state_input=False,
         ),
         data=LeRobotZerithJointDataConfig(
@@ -694,7 +694,7 @@ _CONFIGS = [
             pi05=True,
             paligemma_variant="gemma_2b_lora", 
             action_expert_variant="gemma_300m_lora", 
-            action_horizon=10, 
+            action_horizon=30, 
             discrete_state_input=False,
         ).get_freeze_filter(),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
