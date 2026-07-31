@@ -9,5 +9,5 @@ mkdir -p "$LOG_DIR"
 
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 \
 python scripts/train.py pi05_zerith_sanity \
-  --exp_name clear_bin_box_sanity_v2_5e-5_30k_bs8_h30_pi05 \
-  --resume 2>&1 | tee "$LOG_DIR"/"train_log_pi05.txt"
+  --exp_name sanity_v2_1e-4_2k_bs16_h30_pi05 \
+  --overwrite 2>&1 | tee "$LOG_DIR"/"train_log_pi05.txt"
