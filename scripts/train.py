@@ -13,6 +13,7 @@ import jax.experimental
 import jax.numpy as jnp
 import numpy as np
 import optax
+import torch
 import tqdm_loggable.auto as tqdm
 import wandb
 
@@ -26,6 +27,11 @@ import openpi.training.optimizer as _optimizer
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 import openpi.training.weight_loaders as _weight_loaders
+
+import einops
+from pathlib import Path as _Path
+from lerobot.common.datasets.lerobot_dataset import LeRobotDatasetMetadata as _LeRobotDatasetMetadata, LeRobotDataset as _LeRobotDataset
+import openpi.policies.policy_config as _policy_config
 
 
 def init_logging():
@@ -198,6 +204,111 @@ def train_step(
     return new_state, info
 
 
+def _parse_image(image) -> np.ndarray:
+    if isinstance(image, torch.Tensor):
+        image = image.detach().cpu().numpy()
+    image = np.asarray(image)
+    if np.issubdtype(image.dtype, np.floating):
+        image = (255 * image).astype(np.uint8)
+    if image.shape[0] == 3:
+        image = einops.rearrange(image, "c h w -> h w c")
+    return image
+
+
+def run_open_loop_eval(
+    config: _config.TrainConfig,
+    checkpoint_dir: str,
+    step: int,
+) -> dict[str, float]:
+    """Run open-loop evaluation on a test set and return metrics."""
+    ckpt_path = _Path(checkpoint_dir) / str(step)
+    policy = _policy_config.create_trained_policy(
+        config,
+        ckpt_path,
+        default_prompt=config.eval_default_prompt,
+    )
+    logging.info("Eval policy created from checkpoint step %d", step)
+
+    action_horizon = config.model.action_horizon
+
+    data_path = _Path(config.eval_data_path)
+    if data_path.is_absolute() and data_path.exists():
+        repo_id = data_path.name
+        root = data_path
+    else:
+        repo_id = config.eval_data_path
+        root = None
+
+    dataset_meta = _LeRobotDatasetMetadata(repo_id, root=root, local_files_only=True)
+    fps = dataset_meta.fps
+    delta_timestamps = {"action": [t / fps for t in range(action_horizon)]}
+    dataset = _LeRobotDataset(repo_id, root=root, delta_timestamps=delta_timestamps, local_files_only=True)
+
+    num_episodes = dataset.num_episodes
+    all_mae = []
+    all_mse = []
+
+    for traj_id in config.eval_traj_ids:
+        if traj_id < 0 or traj_id >= num_episodes:
+            continue
+
+        start_id = int(dataset.episode_data_index["from"][traj_id])
+        end_id = int(dataset.episode_data_index["to"][traj_id])
+
+        gt_chunks = []
+        pred_chunks = []
+        count = 0
+
+        for data_id in range(start_id, end_id, action_horizon):
+            sample = dataset[data_id]
+            obs = {
+                "images": {
+                    "cam_high": _parse_image(sample["observation.images.cam_high"]),
+                    "cam_left_wrist": _parse_image(sample["observation.images.cam_left_wrist"]),
+                    "cam_right_wrist": _parse_image(sample["observation.images.cam_right_wrist"]),
+                },
+                "state": np.asarray(sample["observation.state"]),
+            }
+            if "prompt" in sample:
+                obs["prompt"] = sample["prompt"]
+            elif config.eval_default_prompt is not None:
+                obs["prompt"] = config.eval_default_prompt
+
+            gt_chunk = np.asarray(sample["action"])
+            if gt_chunk.ndim == 1:
+                gt_chunk = gt_chunk[np.newaxis, :]
+            gt_chunks.append(gt_chunk)
+
+            result = policy.infer(obs)
+            pred_chunk = result["actions"]
+            if pred_chunk.ndim == 1:
+                pred_chunk = pred_chunk[np.newaxis, :]
+            pred_chunks.append(pred_chunk)
+
+            count += 1
+            if count >= config.eval_max_infer_time:
+                break
+
+        gt = np.concatenate(gt_chunks, axis=0)
+        pred = np.concatenate(pred_chunks, axis=0)
+        # Truncate to same length.
+        min_len = min(len(gt), len(pred))
+        gt, pred = gt[:min_len], pred[:min_len]
+
+        mse = float(np.mean((gt - pred) ** 2))
+        mae = float(np.mean(np.abs(gt - pred)))
+        all_mse.append(mse)
+        all_mae.append(mae)
+        logging.info("Eval traj %d: MSE=%.6f, MAE=%.6f", traj_id, mse, mae)
+
+    if all_mae:
+        avg_mae = float(np.mean(all_mae))
+        avg_mse = float(np.mean(all_mse))
+        logging.info("Eval avg: MSE=%.6f, MAE=%.6f", avg_mse, avg_mae)
+        return {"eval_mse": avg_mse, "eval_mae": avg_mae}
+    return {}
+
+
 def main(config: _config.TrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
@@ -297,6 +408,15 @@ def main(config: _config.TrainConfig):
 
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
             _checkpoints.save_state(checkpoint_manager, train_state, data_loader, step)
+
+            # Run open-loop evaluation if eval_data_path is configured.
+            if config.eval_data_path is not None:
+                logging.info("Waiting for checkpoint save to finish before eval...")
+                checkpoint_manager.wait_until_finished()
+                eval_metrics = run_open_loop_eval(config, str(config.checkpoint_dir), step)
+                if eval_metrics:
+                    wandb.log(eval_metrics, step=step)
+                    pbar.write(f"Step {step} eval: {', '.join(f'{k}={v:.6f}' for k, v in eval_metrics.items())}")
 
     logging.info("Waiting for checkpoint manager to finish")
     checkpoint_manager.wait_until_finished()

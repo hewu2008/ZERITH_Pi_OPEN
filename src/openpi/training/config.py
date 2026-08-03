@@ -588,6 +588,12 @@ class TrainConfig:
     # If true, will enable wandb logging.
     wandb_enabled: bool = True
 
+    # Open-loop evaluation settings. If eval_data_path is set, evaluation will run at each save_interval.
+    eval_data_path: str | None = None
+    eval_traj_ids: tuple[int, ...] = (0, 1, 2, 3)
+    eval_max_infer_time: int = 40
+    eval_default_prompt: str | None = None
+
     # Used to pass metadata to the policy server.
     policy_metadata: dict[str, Any] | None = None
 
@@ -729,14 +735,14 @@ _CONFIGS = [
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=1000,
             peak_lr=1e-4,
-            decay_steps=30000,
+            decay_steps=60000,
             decay_lr=5e-6,
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("/home/jszn/hewu/model_zoo/pi05_base_params/params"),
         batch_size=16,
         log_interval=10,
         save_interval=1000,
-        num_train_steps=30000,
+        num_train_steps=60000,
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             paligemma_variant="gemma_2b_lora", 
