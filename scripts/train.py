@@ -136,6 +136,7 @@ def init_train_state(
 @at.typecheck
 def train_step(
     config: _config.TrainConfig,
+    action_scale: jnp.ndarray,
     rng: at.KeyArrayLike,
     state: training_utils.TrainState,
     batch: tuple[_model.Observation, _model.Actions],
@@ -147,15 +148,20 @@ def train_step(
     def loss_fn(
         model: _model.BaseModel, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions
     ):
-        chunked_loss = model.compute_loss(rng, observation, actions, train=True)
-        return jnp.mean(chunked_loss)
+        chunked_loss, action_err = model.compute_loss(rng, observation, actions, train=True)
+        return jnp.mean(chunked_loss), action_err
 
     train_rng = jax.random.fold_in(rng, state.step)
     observation, actions = batch
 
     # Filter out frozen params.
     diff_state = nnx.DiffState(0, config.trainable_filter)
-    loss, grads = nnx.value_and_grad(loss_fn, argnums=diff_state)(model, train_rng, observation, actions)
+    (loss, action_err), grads = nnx.value_and_grad(loss_fn, argnums=diff_state, has_aux=True)(
+        model, train_rng, observation, actions
+    )
+
+    # Denormalize action error to original scale for meaningful MAE.
+    action_mae = jnp.mean(action_err * action_scale)
 
     params = state.params.filter(config.trainable_filter)
     updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
@@ -185,6 +191,7 @@ def train_step(
     )
     info = {
         "loss": loss,
+        "action_mae": action_mae,
         "grad_norm": optax.global_norm(grads),
         "param_norm": optax.global_norm(kernel_params),
     }
@@ -240,8 +247,25 @@ def main(config: _config.TrainConfig):
     if resuming:
         train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
 
+    # Compute action scale for unnormalized MAE.
+    # z-score norm: scale = std + 1e-6
+    # quantile norm: scale = (q99 - q01 + 1e-6) / 2
+    data_config = data_loader.data_config()
+    action_dim = config.model.action_dim
+    norm_stats = data_config.norm_stats
+    if norm_stats is not None and "actions" in norm_stats:
+        stats = norm_stats["actions"]
+        if data_config.use_quantile_norm and stats.q01 is not None and stats.q99 is not None:
+            scale = (stats.q99 - stats.q01 + 1e-6) / 2.0
+        else:
+            scale = stats.std + 1e-6
+        scale = np.pad(np.asarray(scale), (0, max(0, action_dim - len(scale))), constant_values=1.0)
+        action_scale = jnp.asarray(scale[:action_dim])
+    else:
+        action_scale = jnp.ones((action_dim,))
+
     ptrain_step = jax.jit(
-        functools.partial(train_step, config),
+        functools.partial(train_step, config, action_scale),
         in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
         out_shardings=(train_state_sharding, replicated_sharding),
         donate_argnums=(1,),
@@ -265,7 +289,7 @@ def main(config: _config.TrainConfig):
             stacked_infos = common_utils.stack_forest(infos)
             reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
             reduced_info["lr"] = float(lr_schedule_fn(step))
-            info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
+            info_str = ", ".join(f"{k}={v:.6f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
             wandb.log(reduced_info, step=step)
             infos = []
