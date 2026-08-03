@@ -142,7 +142,6 @@ def init_train_state(
 @at.typecheck
 def train_step(
     config: _config.TrainConfig,
-    action_scale: jnp.ndarray,
     rng: at.KeyArrayLike,
     state: training_utils.TrainState,
     batch: tuple[_model.Observation, _model.Actions],
@@ -154,20 +153,17 @@ def train_step(
     def loss_fn(
         model: _model.BaseModel, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions
     ):
-        chunked_loss, action_err = model.compute_loss(rng, observation, actions, train=True)
-        return jnp.mean(chunked_loss), action_err
+        chunked_loss = model.compute_loss(rng, observation, actions, train=True)
+        return jnp.mean(chunked_loss)
 
     train_rng = jax.random.fold_in(rng, state.step)
     observation, actions = batch
 
     # Filter out frozen params.
     diff_state = nnx.DiffState(0, config.trainable_filter)
-    (loss, action_err), grads = nnx.value_and_grad(loss_fn, argnums=diff_state, has_aux=True)(
+    loss, grads = nnx.value_and_grad(loss_fn, argnums=diff_state)(
         model, train_rng, observation, actions
     )
-
-    # Denormalize action error to original scale for meaningful MAE.
-    action_mae = jnp.mean(action_err * action_scale)
 
     params = state.params.filter(config.trainable_filter)
     updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
@@ -197,11 +193,29 @@ def train_step(
     )
     info = {
         "loss": loss,
-        "action_mae": action_mae,
         "grad_norm": optax.global_norm(grads),
         "param_norm": optax.global_norm(kernel_params),
     }
     return new_state, info
+
+
+@at.typecheck
+def eval_step(
+    action_scale: jnp.ndarray,
+    rng: at.KeyArrayLike,
+    state: training_utils.TrainState,
+    batch: tuple[_model.Observation, _model.Actions],
+) -> at.Float[at.Array, ""]:
+    """Run full denoising on the current batch and compute unnormalized MAE."""
+    model = nnx.merge(state.model_def, state.params)
+    model.eval()
+
+    observation, actions = batch
+    eval_rng = jax.random.fold_in(rng, state.step)
+    pred_actions = model.sample_actions(eval_rng, observation, num_steps=10)
+
+    # Both pred and gt are in normalized space; multiply by action_scale to denormalize.
+    return jnp.mean(jnp.abs(pred_actions - actions) * action_scale)
 
 
 def _parse_image(image) -> np.ndarray:
@@ -358,9 +372,7 @@ def main(config: _config.TrainConfig):
     if resuming:
         train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
 
-    # Compute action scale for unnormalized MAE.
-    # z-score norm: scale = std + 1e-6
-    # quantile norm: scale = (q99 - q01 + 1e-6) / 2
+    # Compute action scale for unnormalized eval MAE.
     data_config = data_loader.data_config()
     action_dim = config.model.action_dim
     norm_stats = data_config.norm_stats
@@ -376,10 +388,15 @@ def main(config: _config.TrainConfig):
         action_scale = jnp.ones((action_dim,))
 
     ptrain_step = jax.jit(
-        functools.partial(train_step, config, action_scale),
+        functools.partial(train_step, config),
         in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
         out_shardings=(train_state_sharding, replicated_sharding),
         donate_argnums=(1,),
+    )
+    peval_step = jax.jit(
+        functools.partial(eval_step, action_scale),
+        in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+        out_shardings=replicated_sharding,
     )
 
     start_step = int(train_state.step)
@@ -400,6 +417,10 @@ def main(config: _config.TrainConfig):
             stacked_infos = common_utils.stack_forest(infos)
             reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
             reduced_info["lr"] = float(lr_schedule_fn(step))
+            # Run full denoising eval on current batch.
+            with sharding.set_mesh(mesh):
+                eval_mae = jax.device_get(peval_step(train_rng, train_state, batch))
+            reduced_info["eval_mae"] = float(eval_mae)
             info_str = ", ".join(f"{k}={v:.6f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
             wandb.log(reduced_info, step=step)
