@@ -419,8 +419,8 @@ def main(config: _config.TrainConfig):
             reduced_info["lr"] = float(lr_schedule_fn(step))
             # Run full denoising eval on current batch.
             with sharding.set_mesh(mesh):
-                eval_mae = jax.device_get(peval_step(train_rng, train_state, batch))
-            reduced_info["eval_mae"] = float(eval_mae)
+                mae = jax.device_get(peval_step(train_rng, train_state, batch))
+            reduced_info["mae"] = float(mae)
             info_str = ", ".join(f"{k}={v:.6f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
             wandb.log(reduced_info, step=step)
