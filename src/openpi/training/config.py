@@ -738,7 +738,7 @@ _CONFIGS = [
             decay_steps=30000,
             decay_lr=5e-6,
         ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("/home/jszn/hewu/model_zoo/pi05_base_params/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/4T-1/hewu/model_zoo/pi05_base_params/params"),
         batch_size=16,
         log_interval=10,
         save_interval=1000,

@@ -258,6 +258,10 @@ def run_open_loop_eval(
     delta_timestamps = {"action": [t / fps for t in range(action_horizon)]}
     dataset = _LeRobotDataset(repo_id, root=root, delta_timestamps=delta_timestamps, local_files_only=True)
 
+    # Tasks maps task_index -> task description, mirroring the training data loader's
+    # PromptFromLeRobotTask transform so the eval prompt is read from the dataset.
+    tasks = getattr(dataset_meta, "tasks", None)
+
     num_episodes = dataset.num_episodes
     all_mae = []
     all_mse = []
@@ -285,6 +289,8 @@ def run_open_loop_eval(
             }
             if "prompt" in sample:
                 obs["prompt"] = sample["prompt"]
+            elif tasks is not None and "task_index" in sample:
+                obs["prompt"] = tasks[int(sample["task_index"])]
             elif config.eval_default_prompt is not None:
                 obs["prompt"] = config.eval_default_prompt
 
