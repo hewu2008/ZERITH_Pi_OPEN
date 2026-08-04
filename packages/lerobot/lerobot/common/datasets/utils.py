@@ -408,7 +408,7 @@ def check_timestamps_sync(
     account for possible numerical error.
     """
 
-    timestamps = torch.stack(hf_dataset["timestamp"])
+    timestamps = torch.tensor(hf_dataset["timestamp"])
     diffs = torch.diff(timestamps)
     within_tolerance = torch.abs(diffs - 1 / fps) <= tolerance_s
 
