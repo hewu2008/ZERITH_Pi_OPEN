@@ -408,7 +408,10 @@ def check_timestamps_sync(
     account for possible numerical error.
     """
 
-    timestamps = torch.tensor(hf_dataset["timestamp"])
+    # NOTE: Access the underlying arrow table directly to avoid triggering the
+    # dataset's transform/decoders (e.g. image decoding) which would otherwise
+    # materialize every image column just to read a scalar column.
+    timestamps = torch.tensor(hf_dataset.data.column("timestamp").to_pylist())
     diffs = torch.diff(timestamps)
     within_tolerance = torch.abs(diffs - 1 / fps) <= tolerance_s
 
@@ -426,7 +429,7 @@ def check_timestamps_sync(
         filtered_indices = original_indices[mask]
         outside_tolerance_filtered_indices = torch.nonzero(~filtered_within_tolerance)  # .squeeze()
         outside_tolerance_indices = filtered_indices[outside_tolerance_filtered_indices]
-        episode_indices = torch.stack(hf_dataset["episode_index"])
+        episode_indices = torch.tensor(hf_dataset.data.column("episode_index").to_pylist())
 
         outside_tolerances = []
         for idx in outside_tolerance_indices:
