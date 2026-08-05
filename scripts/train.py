@@ -2,6 +2,7 @@ import dataclasses
 import functools
 import logging
 import platform
+import time
 from typing import Any
 
 import etils.epath as epath
@@ -424,11 +425,14 @@ def main(config: _config.TrainConfig):
             reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
             reduced_info["lr"] = float(lr_schedule_fn(step))
             # Run full denoising eval on current batch.
+            mae_start = time.perf_counter()
             with sharding.set_mesh(mesh):
                 mae = jax.device_get(peval_step(train_rng, train_state, batch))
-            reduced_info["mae"] = float(mae)
+            mae = float(mae)
+            mae_dt = time.perf_counter() - mae_start
+            reduced_info["mae"] = mae
             info_str = ", ".join(f"{k}={v:.6f}" for k, v in reduced_info.items())
-            pbar.write(f"Step {step}: {info_str}")
+            pbar.write(f"Step {step}: {info_str}, mae_denoise_time={mae_dt:.3f}s")
             wandb.log(reduced_info, step=step)
             infos = []
         batch = next(data_iter)
