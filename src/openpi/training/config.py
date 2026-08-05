@@ -709,6 +709,40 @@ _CONFIGS = [
 
     TrainConfig(
         name="pi05_zerith",
+        model=pi0_config.Pi0Config(action_horizon=30, pi05=True, discrete_state_input=False),
+        data=LeRobotZerithJointDataConfig(
+            # LeRobot stores the converted dataset under <LEROBOT_HOME>/<repo_id>.
+            # Keep this value aligned with train.sh REPO_ID and the dataset path used during conversion.
+            repo_id="hewu2008/clear_the_bin_box_20260720_v1",
+            assets=AssetsConfig(
+                # Normalization stats are loaded from <assets_dir>/<asset_id>/norm_stats.json.
+                # The asset_id can match repo_id, or point to another robot/task's stats when reusing assets.
+                assets_dir="./assets",
+                asset_id="hewu2008/clear_the_bin_box_20260720_v1",
+            ),
+            base_config=DataConfig(
+                local_files_only=True,
+                prompt_from_task=True,
+            ),
+            use_quantile_norm=False,
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1000,
+            peak_lr=5e-5,
+            decay_steps=30000,
+            decay_lr=5e-6,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/4T-1/hewu/model_zoo/pi05_base_params/params"),
+        batch_size=16,
+        log_interval=10,
+        save_interval=1000,
+        num_train_steps=30000,
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+    ),
+
+    TrainConfig(
+        name="pi05_lora_zerith",
         model=pi0_config.Pi0Config(
             pi05=True, 
             paligemma_variant="gemma_2b_lora", 
