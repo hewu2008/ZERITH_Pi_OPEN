@@ -52,7 +52,13 @@ def init_logging():
     )
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
-    logger.handlers[0].setFormatter(formatter)
+    # Reuse the existing handler if present; otherwise attach a StreamHandler.
+    if logger.handlers:
+        logger.handlers[0].setFormatter(formatter)
+    else:
+        handler = logging.StreamHandler()
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
 
 
 def _frame_image_to_hwc_uint8(image) -> np.ndarray:
@@ -293,9 +299,10 @@ def merge_datasets(
                     raise ValueError(f"episode {ep_idx} has non-positive length {ep_length}")
 
                 # Resolve the task string for this episode.
+                # episodes.jsonl stores {"episode_index", "tasks": [str, ...], "length"}.
                 ep_meta = src.meta.episodes[ep_idx]
-                src_task_index = ep_meta["task_index"]
-                task_str = src.meta.tasks.get(src_task_index, "")
+                task_list = ep_meta.get("tasks", [])
+                task_str = task_list[0] if task_list else ""
                 if prefix:
                     task_str = f"{prefix}: {task_str}" if task_str else prefix
 
