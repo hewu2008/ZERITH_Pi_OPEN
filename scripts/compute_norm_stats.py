@@ -21,6 +21,24 @@ class RemoveStrings(transforms.DataTransformFn):
         return {k: v for k, v in x.items() if not np.issubdtype(np.asarray(v).dtype, np.str_)}
 
 
+class AddDummyImages(transforms.DataTransformFn):
+    """Insert tiny dummy images for keys missing because image columns were removed.
+
+    This allows the repack / MobilearxInputs transforms to run without triggering
+    image decoding from the parquet — we only need state/actions for norm stats.
+    """
+
+    def __init__(self, image_keys: list[str]):
+        self.image_keys = image_keys
+        self._dummy = np.zeros((1, 1, 3), dtype=np.uint8)
+
+    def __call__(self, x: dict) -> dict:
+        for key in self.image_keys:
+            if key not in x:
+                x[key] = self._dummy
+        return x
+
+
 def create_torch_dataloader(
     data_config: _config.DataConfig,
     action_horizon: int,
@@ -32,9 +50,28 @@ def create_torch_dataloader(
     if data_config.repo_id is None:
         raise ValueError("Data config must have a repo_id")
     dataset = _data_loader.create_torch_dataset(data_config, action_horizon, model_config)
+
+    # --- Fast path: remove image columns from HF dataset to skip image decoding ---
+    # Image decoding is the main bottleneck (3 cameras per frame, hundreds of thousands
+    # of frames).  For norm stats we only need state/actions, so we drop image columns
+    # from the underlying HF dataset (lazy schema update — no data reprocessing) and
+    # insert tiny 1×1 dummy images via AddDummyImages before the repack transform.
+    # create_torch_dataset may wrap the LeRobotDataset in a TransformedDataset, so
+    # unwrap to access .meta and .hf_dataset on the actual LeRobotDataset.
+    base = dataset._dataset if hasattr(dataset, "_dataset") else dataset
+    image_keys = [
+        k for k in base.meta.features
+        if base.meta.features[k]["dtype"] in ("image", "video")
+    ]
+    if image_keys:
+        hf_cols_to_remove = [k for k in base.hf_dataset.column_names if k in image_keys]
+        if hf_cols_to_remove:
+            base.hf_dataset = base.hf_dataset.remove_columns(hf_cols_to_remove)
+
     dataset = _data_loader.TransformedDataset(
         dataset,
         [
+            AddDummyImages(image_keys),
             *data_config.repack_transforms.inputs,
             *data_config.data_transforms.inputs,
             # Remove strings since they are not supported by JAX and are not needed to compute norm stats.
