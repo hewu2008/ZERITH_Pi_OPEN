@@ -1,9 +1,9 @@
 """Merge multiple LeRobotDataset datasets into a single dataset.
 
-This script reads several source LeRobotDataset datasets and copies all their
-episodes/frames into a new merged dataset. It preserves task labels (by their
-string description) and optionally prefixes each task with a source-specific tag
-to avoid name collisions across datasets.
+This script copies episodes from multiple source datasets into a new merged
+dataset by directly copying parquet tables (with updated index/episode/task
+columns) and video files. Image data stays as binary in the parquet — no
+decode/encode cycle — so merging is fast.
 
 Example:
     uv run scripts/merge_datasets.py \
@@ -26,15 +26,20 @@ Example:
 
 import dataclasses
 import logging
+import shutil
 from datetime import datetime
 from pathlib import Path
 
-import einops
 import numpy as np
-import torch
+import pyarrow as pa
+import pyarrow.parquet as pq
 import tqdm
 import tyro
-from lerobot.common.datasets.lerobot_dataset import LEROBOT_HOME, LeRobotDataset
+from lerobot.common.datasets.lerobot_dataset import (
+    LEROBOT_HOME,
+    LeRobotDataset,
+    LeRobotDatasetMetadata,
+)
 
 
 def init_logging():
@@ -52,7 +57,6 @@ def init_logging():
     )
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
-    # Reuse the existing handler if present; otherwise attach a StreamHandler.
     if logger.handlers:
         logger.handlers[0].setFormatter(formatter)
     else:
@@ -61,67 +65,47 @@ def init_logging():
         logger.addHandler(handler)
 
 
-def _frame_image_to_hwc_uint8(image) -> np.ndarray:
-    """Convert an image returned by LeRobotDataset.__getitem__ to HWC uint8.
-
-    __getitem__ returns images as torch tensors in CHW layout (possibly float in
-    [0,1]). add_frame expects HWC numpy arrays. This helper normalizes the input.
-    """
-    if isinstance(image, torch.Tensor):
-        image = image.detach().cpu().numpy()
-    image = np.asarray(image)
-    if np.issubdtype(image.dtype, np.floating):
-        image = (255.0 * image).clip(0, 255).astype(np.uint8)
-    if image.ndim == 3 and image.shape[0] == 3 and image.shape[-1] != 3:
-        # CHW -> HWC
-        image = einops.rearrange(image, "c h w -> h w c")
-    return image
-
-
-def _validate_schema_compatibility(sources: list[LeRobotDataset]) -> None:
+def _validate_meta_compatibility(metas: list[LeRobotDatasetMetadata]) -> None:
     """Ensure all source datasets share the same feature schema and fps."""
-    if len(sources) <= 1:
+    if len(metas) <= 1:
         return
 
-    ref = sources[0]
+    ref = metas[0]
     ref_features = ref.features
     ref_fps = ref.fps
 
-    for i, src in enumerate(sources[1:], start=1):
-        if src.fps != ref_fps:
+    for i, m in enumerate(metas[1:], start=1):
+        if m.fps != ref_fps:
             raise ValueError(
                 f"fps mismatch: source[0] has fps={ref_fps}, "
-                f"source[{i}] ('{src.repo_id}') has fps={src.fps}. "
+                f"source[{i}] ('{m.repo_id}') has fps={m.fps}. "
                 "All sources must share the same fps."
             )
-        if set(src.features.keys()) != set(ref_features.keys()):
-            missing = set(ref_features.keys()) - set(src.features.keys())
-            extra = set(src.features.keys()) - set(ref_features.keys())
+        if set(m.features.keys()) != set(ref_features.keys()):
+            missing = set(ref_features.keys()) - set(m.features.keys())
+            extra = set(m.features.keys()) - set(ref_features.keys())
             raise ValueError(
-                f"Feature key mismatch in source[{i}] ('{src.repo_id}'): "
+                f"Feature key mismatch in source[{i}] ('{m.repo_id}'): "
                 f"missing={missing}, extra={extra}."
             )
         for key, ref_ft in ref_features.items():
-            src_ft = src.features[key]
+            src_ft = m.features[key]
             if src_ft["dtype"] != ref_ft["dtype"]:
                 raise ValueError(
-                    f"dtype mismatch for feature '{key}' in source[{i}] ('{src.repo_id}'): "
+                    f"dtype mismatch for feature '{key}' in source[{i}] ('{m.repo_id}'): "
                     f"expected '{ref_ft['dtype']}', got '{src_ft['dtype']}'."
                 )
             if tuple(src_ft["shape"]) != tuple(ref_ft["shape"]):
                 raise ValueError(
-                    f"shape mismatch for feature '{key}' in source[{i}] ('{src.repo_id}'): "
+                    f"shape mismatch for feature '{key}' in source[{i}] ('{m.repo_id}'): "
                     f"expected {ref_ft['shape']}, got {src_ft['shape']}."
                 )
 
 
-def _build_target_features(source: LeRobotDataset) -> dict:
-    """Copy the feature schema from a source dataset, preserving image/video dtype."""
+def _build_target_features(meta: LeRobotDatasetMetadata) -> dict:
+    """Copy the feature schema from a source dataset, skipping auto-managed defaults."""
     features = {}
-    for key, ft in source.features.items():
-        # Skip the auto-managed default features (index, frame_index, episode_index,
-        # timestamp, task_index); LeRobotDataset.create adds them automatically via
-        # DEFAULT_FEATURES.
+    for key, ft in meta.features.items():
         if key in ("index", "frame_index", "episode_index", "timestamp", "task_index"):
             continue
         features[key] = {
@@ -143,16 +127,82 @@ def _resolve_source_root(roots: list[Path] | None, idx: int) -> Path | None:
 
 @dataclasses.dataclass(frozen=True)
 class MergeConfig:
-    # Number of async image-writer processes (0 = use threads only).
-    image_writer_processes: int = 10
-    # Number of async image-writer threads.
-    image_writer_threads: int = 5
     # Tolerance in seconds for timestamp sync checks on the merged dataset.
     tolerance_s: float = 1e-4
     # Whether to compute dataset statistics at the end of consolidation.
     run_compute_stats: bool = True
-    # If True, keep the intermediate image files after video encoding.
-    keep_image_files: bool = False
+
+
+def _copy_episode_fast(
+    src_meta: LeRobotDatasetMetadata,
+    src_ep_idx: int,
+    target: LeRobotDataset,
+    new_ep_idx: int,
+    new_task_idx: int,
+    frame_offset: int,
+    video_keys: list[str],
+) -> int:
+    """Copy one episode from source to target via direct parquet copy.
+
+    Reads the source parquet table with pyarrow, updates the index/episode_index/
+    task_index columns, writes it to the target path. For video mode, also copies
+    the mp4 files. Returns the episode length (number of frames).
+    """
+    # ---- Read source parquet ----
+    src_pq_path = src_meta.root / src_meta.get_data_file_path(src_ep_idx)
+    table = pq.read_table(src_pq_path)
+    ep_length = table.num_rows
+
+    # ---- Update meta columns ----
+    col_names = table.column_names
+
+    if "index" in col_names:
+        col_idx = table.schema.get_field_index("index")
+        table = table.set_column(
+            col_idx,
+            table.schema.field(col_idx),
+            pa.array(
+                np.arange(frame_offset, frame_offset + ep_length, dtype=np.int64),
+                type=table.column("index").type,
+            ),
+        )
+
+    if "episode_index" in col_names:
+        col_idx = table.schema.get_field_index("episode_index")
+        table = table.set_column(
+            col_idx,
+            table.schema.field(col_idx),
+            pa.array(
+                np.full(ep_length, new_ep_idx, dtype=np.int64),
+                type=table.column("episode_index").type,
+            ),
+        )
+
+    if "task_index" in col_names:
+        col_idx = table.schema.get_field_index("task_index")
+        table = table.set_column(
+            col_idx,
+            table.schema.field(col_idx),
+            pa.array(
+                np.full(ep_length, new_task_idx, dtype=np.int64),
+                type=table.column("task_index").type,
+            ),
+        )
+
+    # ---- Write target parquet ----
+    tgt_pq_path = target.root / target.meta.get_data_file_path(new_ep_idx)
+    tgt_pq_path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(table, tgt_pq_path)
+
+    # ---- Copy video files (video mode only) ----
+    for vid_key in video_keys:
+        src_video = src_meta.root / src_meta.get_video_file_path(src_ep_idx, vid_key)
+        tgt_video = target.root / target.meta.get_video_file_path(new_ep_idx, vid_key)
+        tgt_video.parent.mkdir(parents=True, exist_ok=True)
+        if src_video.exists():
+            shutil.copy2(src_video, tgt_video)
+
+    return ep_length
 
 
 def merge_datasets(
@@ -169,19 +219,19 @@ def merge_datasets(
 ) -> LeRobotDataset:
     """Merge multiple LeRobotDataset sources into a single new dataset.
 
+    Uses direct parquet copy (pyarrow) instead of frame-by-frame decoding,
+    so image data is never decoded/re-encoded — making the merge orders of
+    magnitude faster for image-mode datasets.
+
     Args:
         target_repo_id: repo_id for the output dataset.
         source_repo_ids: list of source repo_ids to merge.
         source_roots: optional per-source root directories. If None, uses LEROBOT_HOME.
-        task_prefixes: optional per-source prefix prepended to each task string
-            (e.g. "task_a: do something"). Must have the same length as source_repo_ids
-            if provided. If None, task strings are copied verbatim.
+        task_prefixes: optional per-source prefix prepended to each task string.
         target_root: root directory for the output dataset. If None, uses LEROBOT_HOME.
-        use_videos: whether the target dataset stores images as videos. If None,
-            inherits from the first source dataset.
-        config: merge configuration (image writer, tolerance, stats).
+        use_videos: whether the target stores images as videos. If None, inherits from source.
+        config: merge configuration.
         episodes_per_source: optional per-source list of episode indices to include.
-            If None, all episodes from each source are included.
         error_log_path: optional path to write a log of skipped episodes.
 
     Returns:
@@ -190,12 +240,11 @@ def merge_datasets(
     if len(source_repo_ids) == 0:
         raise ValueError("source_repo_ids must contain at least one dataset.")
 
-    if task_prefixes is not None:
-        if len(task_prefixes) != len(source_repo_ids):
-            raise ValueError(
-                f"task_prefixes (len={len(task_prefixes)}) must match "
-                f"source_repo_ids (len={len(source_repo_ids)})."
-            )
+    if task_prefixes is not None and len(task_prefixes) != len(source_repo_ids):
+        raise ValueError(
+            f"task_prefixes (len={len(task_prefixes)}) must match "
+            f"source_repo_ids (len={len(source_repo_ids)})."
+        )
 
     if episodes_per_source is not None and len(episodes_per_source) != len(source_repo_ids):
         raise ValueError(
@@ -206,82 +255,67 @@ def merge_datasets(
     init_logging()
     logging.info(f"Merging {len(source_repo_ids)} datasets into '{target_repo_id}'")
 
-    # ---- Load all source datasets ----
-    sources: list[LeRobotDataset] = []
+    # ---- Load source metadata (fast — no hf_dataset loading) ----
+    source_metas: list[LeRobotDatasetMetadata] = []
     for i, repo_id in enumerate(source_repo_ids):
         root = _resolve_source_root(source_roots, i)
-        logging.info(f"[{i+1}/{len(source_repo_ids)}] Loading source '{repo_id}' (root={root})")
-        src = LeRobotDataset(repo_id, root=root, local_files_only=True)
+        logging.info(f"[{i+1}/{len(source_repo_ids)}] Loading source metadata '{repo_id}' (root={root})")
+        meta = LeRobotDatasetMetadata(repo_id, root=root, local_files_only=True)
         logging.info(
-            f"  -> {src.num_episodes} episodes, {src.num_frames} frames, "
-            f"fps={src.fps}, features={list(src.features.keys())}"
+            f"  -> {meta.total_episodes} episodes, {meta.total_frames} frames, "
+            f"fps={meta.fps}, features={list(meta.features.keys())}"
         )
-        sources.append(src)
+        source_metas.append(meta)
 
     # ---- Validate schema compatibility ----
-    _validate_schema_compatibility(sources)
+    _validate_meta_compatibility(source_metas)
     logging.info("Schema compatibility check passed.")
 
     # ---- Determine target storage mode ----
-    ref = sources[0]
+    ref_meta = source_metas[0]
+    video_keys = list(ref_meta.video_keys)
     if use_videos is None:
-        # Inherit from the reference source: if it has any video-key feature, use videos.
-        use_videos = len(ref.meta.video_keys) > 0
-        logging.info(f"Inherited use_videos={use_videos} from source '{ref.repo_id}'.")
+        use_videos = len(video_keys) > 0
+        logging.info(f"Inherited use_videos={use_videos} from source '{ref_meta.repo_id}'.")
 
     # ---- Create the target dataset ----
-    target_features = _build_target_features(ref)
+    target_features = _build_target_features(ref_meta)
     if target_root is None:
         target_path = LEROBOT_HOME / target_repo_id
     else:
         target_path = Path(target_root) / target_repo_id
 
     if target_path.exists():
-        import shutil
-
         logging.warning(f"Target path '{target_path}' already exists; removing it.")
         shutil.rmtree(target_path)
 
     logging.info(f"Creating target dataset at '{target_path}' (use_videos={use_videos})")
     target = LeRobotDataset.create(
         repo_id=target_repo_id,
-        fps=ref.fps,
+        fps=ref_meta.fps,
         root=str(target_path) if target_root is not None else None,
         features=target_features,
         use_videos=use_videos,
         tolerance_s=config.tolerance_s,
-        image_writer_processes=config.image_writer_processes,
-        image_writer_threads=config.image_writer_threads,
     )
-    # create() may have started the image writer already; ensure it's running.
-    if target.image_writer is None:
-        target.start_image_writer(
-            num_processes=config.image_writer_processes,
-            num_threads=config.image_writer_threads,
-        )
 
-    # Keys that should be copied verbatim from each source frame (non-image, non-meta).
-    meta_keys = {"index", "frame_index", "episode_index", "timestamp", "task_index"}
-    copyable_keys = [
-        key for key in ref.features.keys() if key not in meta_keys and ref.features[key]["dtype"] not in ("image", "video")
-    ]
-    camera_keys = list(ref.meta.camera_keys)
-
-    skipped_episodes: list[tuple[int, str, int, str]] = []  # (source_idx, repo_id, ep_idx, reason)
+    skipped_episodes: list[tuple[int, str, int, str]] = []
 
     # ---- Copy episodes from each source ----
-    for src_idx, src in enumerate(sources):
-        prefix = task_prefixes[src_idx] if task_prefixes is not None else None
-        src_repo = src.repo_id
+    new_ep_idx = 0
+    frame_offset = 0
 
-        # Determine which episodes to copy from this source.
+    for src_idx, src_meta in enumerate(source_metas):
+        prefix = task_prefixes[src_idx] if task_prefixes is not None else None
+        src_repo = src_meta.repo_id
+
         if episodes_per_source is not None and episodes_per_source[src_idx] is not None:
             ep_indices = list(episodes_per_source[src_idx])
         else:
-            ep_indices = list(range(src.num_episodes))
+            ep_indices = list(range(src_meta.total_episodes))
 
         logging.info(
-            f"[{src_idx+1}/{len(sources)}] Copying {len(ep_indices)} episodes "
+            f"[{src_idx+1}/{len(source_metas)}] Copying {len(ep_indices)} episodes "
             f"from '{src_repo}' (task_prefix={prefix!r})"
         )
 
@@ -289,58 +323,47 @@ def merge_datasets(
             ep_indices, desc=f"source[{src_idx}] '{src_repo}'", dynamic_ncols=True
         ):
             try:
-                if ep_idx < 0 or ep_idx >= src.num_episodes:
-                    raise IndexError(f"episode_index {ep_idx} out of range [0, {src.num_episodes})")
-
-                ep_from = int(src.episode_data_index["from"][ep_idx])
-                ep_to = int(src.episode_data_index["to"][ep_idx])
-                ep_length = ep_to - ep_from
-                if ep_length <= 0:
-                    raise ValueError(f"episode {ep_idx} has non-positive length {ep_length}")
+                if ep_idx < 0 or ep_idx >= src_meta.total_episodes:
+                    raise IndexError(f"episode_index {ep_idx} out of range [0, {src_meta.total_episodes})")
 
                 # Resolve the task string for this episode.
-                # episodes.jsonl stores {"episode_index", "tasks": [str, ...], "length"}.
-                ep_meta = src.meta.episodes[ep_idx]
-                task_list = ep_meta.get("tasks", [])
+                ep_info = src_meta.episodes[ep_idx]
+                task_list = ep_info.get("tasks", [])
                 task_str = task_list[0] if task_list else ""
                 if prefix:
                     task_str = f"{prefix}: {task_str}" if task_str else prefix
 
-                # Copy each frame.
-                for frame_idx in range(ep_from, ep_to):
-                    frame = src[frame_idx]
+                # Get or create task index in the target.
+                new_task_idx = target.meta.get_task_index(task_str)
 
-                    new_frame = {}
-                    for key in copyable_keys:
-                        if key in frame:
-                            val = frame[key]
-                            new_frame[key] = val.numpy() if isinstance(val, torch.Tensor) else np.asarray(val)
+                # Fast copy: read parquet, update columns, write parquet, copy videos.
+                ep_length = _copy_episode_fast(
+                    src_meta=src_meta,
+                    src_ep_idx=ep_idx,
+                    target=target,
+                    new_ep_idx=new_ep_idx,
+                    new_task_idx=new_task_idx,
+                    frame_offset=frame_offset,
+                    video_keys=video_keys,
+                )
 
-                    for cam_key in camera_keys:
-                        if cam_key in frame:
-                            new_frame[cam_key] = _frame_image_to_hwc_uint8(frame[cam_key])
+                # Update target metadata (episodes.jsonl, tasks.jsonl, info.json).
+                target.meta.save_episode(new_ep_idx, ep_length, task_str, new_task_idx)
 
-                    target.add_frame(new_frame)
-
-                target.save_episode(task=task_str, encode_videos=False)
+                new_ep_idx += 1
+                frame_offset += ep_length
 
             except (OSError, KeyError, ValueError, RuntimeError, IndexError) as exc:
                 skipped_episodes.append((src_idx, src_repo, ep_idx, f"{type(exc).__name__}: {exc}"))
                 logging.warning(f"  [SKIP] source[{src_idx}] '{src_repo}' episode {ep_idx}: {exc}")
-                # Reset the target episode buffer so the next episode starts clean.
-                target.clear_episode_buffer()
                 continue
 
     # ---- Finalize ----
-    target.stop_image_writer()
     logging.info(
-        f"All sources processed. Skipped {len(skipped_episodes)} episodes. "
-        "Consolidating target dataset..."
+        f"All sources processed. Copied {new_ep_idx} episodes, {frame_offset} frames. "
+        f"Skipped {len(skipped_episodes)} episodes. Consolidating target dataset..."
     )
-    target.consolidate(
-        run_compute_stats=config.run_compute_stats,
-        keep_image_files=config.keep_image_files,
-    )
+    target.consolidate(run_compute_stats=config.run_compute_stats)
 
     # ---- Write error log if any episodes were skipped ----
     if skipped_episodes:
@@ -393,30 +416,18 @@ class MergeCLIArgs:
     use_videos: bool | None = None
     """Whether the target stores images as videos. If None, inherits from the first source."""
 
-    image_writer_processes: int = 10
-    """Number of async image-writer processes."""
-
-    image_writer_threads: int = 5
-    """Number of async image-writer threads."""
-
     tolerance_s: float = 1e-4
     """Tolerance (seconds) for timestamp sync checks."""
 
     no_compute_stats: bool = False
     """If set, skip computing dataset statistics during consolidation."""
 
-    keep_image_files: bool = False
-    """If set, keep intermediate image files after video encoding."""
-
 
 def main(args: MergeCLIArgs) -> None:
     source_roots = [Path(p) for p in args.source_roots] if args.source_roots else None
     config = MergeConfig(
-        image_writer_processes=args.image_writer_processes,
-        image_writer_threads=args.image_writer_threads,
         tolerance_s=args.tolerance_s,
         run_compute_stats=not args.no_compute_stats,
-        keep_image_files=args.keep_image_files,
     )
     merge_datasets(
         target_repo_id=args.target_repo_id,
