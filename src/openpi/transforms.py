@@ -291,13 +291,24 @@ class TokenizePi05SubtaskInputs(DataTransformFn):
             if not isinstance(subtask, str):
                 subtask = subtask.item()
             tokens, token_mask, ar_mask, loss_mask = self.tokenizer.tokenize_subtask_training(prompt, subtask, state)
-            return {
+            result = {
                 **data,
                 "tokenized_prompt": tokens,
                 "tokenized_prompt_mask": token_mask,
                 "token_ar_mask": ar_mask,
                 "token_loss_mask": loss_mask,
             }
+            # When sample_subtask_prediction is enabled, the two-stage inference path also needs the
+            # action cue as a separate field (even though the training-format prompt already embeds it
+            # contiguously for loss computation). This keeps the output schema consistent with the
+            # sample-only branch below and matches Pi0Config.inputs_spec.
+            if self.sample_subtask_prediction:
+                _, _, _, _, action_suffix, action_suffix_mask = self.tokenizer.tokenize_subtask_inference(
+                    prompt, state
+                )
+                result["tokenized_action_suffix"] = action_suffix
+                result["tokenized_action_suffix_mask"] = action_suffix_mask
+            return result
 
         if self.train_subtask_prediction and "actions" in data:
             raise ValueError("Subtask is required when train_subtask_prediction is enabled.")
@@ -322,7 +333,14 @@ class TokenizePi05SubtaskInputs(DataTransformFn):
             }
 
         tokens, token_mask = self.tokenizer.tokenize(prompt, state)
-        return {**data, "tokenized_prompt": tokens, "tokenized_prompt_mask": token_mask}
+        result = {**data, "tokenized_prompt": tokens, "tokenized_prompt_mask": token_mask}
+        # When train_subtask_prediction is enabled but we are producing inference-only data (no "actions"
+        # or subtask present), still emit the autoregressive and loss mask fields so the output schema
+        # matches Pi0Config.inputs_spec (embed_prefix tolerates zero/False values as no-op).
+        if self.train_subtask_prediction:
+            result["token_ar_mask"] = np.zeros_like(tokens, dtype=np.int32)
+            result["token_loss_mask"] = np.zeros_like(token_mask, dtype=np.bool_)
+        return result
 
 
 @dataclasses.dataclass(frozen=True)

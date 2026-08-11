@@ -83,7 +83,7 @@ def test_pi05_subtask_model():
         action_expert_variant="dummy",
         action_dim=4,
         action_horizon=2,
-        max_token_len=16,
+        max_token_len=64,
         train_subtask_prediction=True,
         sample_subtask_prediction=True,
         max_subtask_len=3,

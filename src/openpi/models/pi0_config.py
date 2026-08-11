@@ -60,12 +60,20 @@ class Pi0Config(_model.BaseModelConfig):
             raise ValueError("subtask_loss_weight must be positive when train_subtask_prediction is enabled.")
         if self.max_subtask_len <= 0:
             raise ValueError("max_subtask_len must be positive.")
-        if (
-            self.train_subtask_prediction or self.sample_subtask_prediction
-        ) and self.max_subtask_len >= self.max_token_len:
-            raise ValueError("max_subtask_len must be smaller than max_token_len.")
         if self.subtask_temperature < 0:
             raise ValueError("subtask_temperature must be non-negative.")
+        if self.train_subtask_prediction or self.sample_subtask_prediction:
+            # The two-stage pipeline places subtask tokens after the prompt, then appends the action cue
+            # "\nAction: " (~8 tokens) before action decoding. Reserve 32 tokens total for action suffix +
+            # prompt BOS/EOS headroom so the concatenated sequence never overflows max_token_len.
+            _SUBTASK_RESERVED_HEADROOM = 32
+            if self.max_subtask_len + _SUBTASK_RESERVED_HEADROOM > self.max_token_len:
+                raise ValueError(
+                    f"max_subtask_len ({self.max_subtask_len}) + reserved headroom "
+                    f"({_SUBTASK_RESERVED_HEADROOM}) must be <= max_token_len ({self.max_token_len}). "
+                    "Increase max_token_len or decrease max_subtask_len to leave room for the prompt, "
+                    "predicted subtask tokens, and the action cue suffix."
+                )
 
     @property
     @override

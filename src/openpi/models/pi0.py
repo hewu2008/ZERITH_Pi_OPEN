@@ -6,6 +6,7 @@ import flax.nnx as nnx
 import flax.nnx.bridge as nnx_bridge
 import jax
 import jax.numpy as jnp
+import numpy as np
 from typing_extensions import override
 
 from openpi.models import model as _model
@@ -15,6 +16,16 @@ import openpi.models.siglip as _siglip
 from openpi.shared import array_typing as at
 
 logger = logging.getLogger("openpi")
+
+
+def _check_token_lengths(expected_total: np.ndarray, actual_total: np.ndarray, max_token_len: int) -> None:
+    """Raises ValueError if any batch element was silently truncated (called via jax.debug.callback)."""
+    if np.any(expected_total != actual_total):
+        raise ValueError(
+            f"Token sequence overflowed max_token_len={max_token_len}! "
+            f"Expected up to {np.max(expected_total)} tokens after placing prompt + subtask + suffix, "
+            f"but only {np.max(actual_total)} fit. Increase max_token_len in Pi0Config."
+        )
 
 
 def make_attn_mask(input_mask, mask_ar):
@@ -250,10 +261,10 @@ class Pi0(_model.BaseModel):
         v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
 
         action_loss = jnp.mean(jnp.square(v_t - u_t), axis=-1)
+        if not self.train_subtask_prediction:
             return action_loss
         subtask_loss = self._compute_subtask_loss(prefix_out, observation)
         return action_loss + self.subtask_loss_weight * subtask_loss[:, None]
-        if not self.train_subtask_prediction:
 
     def _compute_subtask_loss(
         self, prefix_out: at.Float[at.Array, "b s emb"], observation: _model.Observation
@@ -489,6 +500,17 @@ class Pi0(_model.BaseModel):
                 jnp.ones_like(observation.tokenized_action_suffix_mask),
                 observation.tokenized_action_suffix_mask,
             )
+
+        # Runtime guard against silent truncation by _scatter_sequence.
+        # If any prompt + subtask (+ suffix) batch element exceeds the padded max_token_len,
+        # config validation in Pi0Config.__post_init__ should have prevented it; this callback
+        # is a defense-in-depth safety net that works under JIT as well as eager execution.
+        max_token_len = prompt_tokens.shape[-1]
+        expected_total = jnp.sum(prompt_mask, axis=-1) + jnp.sum(subtask_token_mask, axis=-1)
+        if include_action_suffix:
+            expected_total = expected_total + jnp.sum(observation.tokenized_action_suffix_mask, axis=-1)
+        actual_total = jnp.sum(token_mask, axis=-1)
+        jax.debug.callback(_check_token_lengths, expected_total, actual_total, max_token_len)
 
         return dataclasses.replace(
             observation,
