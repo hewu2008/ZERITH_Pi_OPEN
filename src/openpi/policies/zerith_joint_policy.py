@@ -96,7 +96,11 @@ class MobilearxInputs(transforms.DataTransformFn):
         # stored in "prompt"; the output dict always needs to have the key "prompt").
 
         if "prompt" in data:
-            inputs["prompt"] = data["prompt"]     
+            inputs["prompt"] = data["prompt"]
+
+        if "subtask" in data:
+            inputs["subtask"] = data["subtask"]
+
         return inputs
 
 

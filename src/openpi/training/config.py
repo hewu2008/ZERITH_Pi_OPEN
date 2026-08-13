@@ -91,6 +91,9 @@ class DataConfig:
     # If true, will use the LeRobot dataset task to define the prompt.
     prompt_from_task: bool = False
 
+    # If true, will use the LeRobot dataset subtask to define the subtask prompt.
+    prompt_from_subtask: bool = False
+
     # If true, will disable syncing the dataset from the Hugging Face Hub. Allows training on local-only datasets.
     local_files_only: bool = False
 
@@ -264,6 +267,7 @@ def _build_multi_camera_repack_transform() -> _transforms.Group:
                     "state": "observation.state",
                     "actions": "action",
                     "prompt": "prompt",
+                    "subtask": "subtask",
                 }
             )
         ]
@@ -727,7 +731,13 @@ _CONFIGS = [
 
     TrainConfig(
         name="pi05_zerith_subtask",
-        model=pi0_config.Pi0Config(action_horizon=30, pi05=True, discrete_state_input=False),
+        model=pi0_config.Pi0Config(
+            action_horizon=30,
+            pi05=True,
+            discrete_state_input=False,
+            train_subtask_prediction=True,
+            sample_subtask_prediction=True,
+        ),
         data=LeRobotZerithJointDataConfig(
             # LeRobot stores the converted dataset under <LEROBOT_HOME>/<repo_id>.
             # Keep this value aligned with train.sh REPO_ID and the dataset path used during conversion.
@@ -741,6 +751,7 @@ _CONFIGS = [
             base_config=DataConfig(
                 local_files_only=True,
                 prompt_from_task=True,
+                prompt_from_subtask=True,
             ),
             use_quantile_norm=False,
         ),

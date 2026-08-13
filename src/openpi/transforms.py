@@ -414,6 +414,28 @@ class PromptFromLeRobotTask(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class SubtaskFromLeRobotSubtask(DataTransformFn):
+    """Inject the ``subtask`` string field from ``subtask_index``.
+
+    This is the subtask counterpart of ``PromptFromLeRobotTask``. Place it
+    before the repack transforms so downstream transforms receive the
+    ``subtask`` string they expect.
+    """
+
+    subtasks: dict[int, str]
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if "subtask_index" not in data:
+            raise ValueError('Cannot extract subtask without "subtask_index"')
+
+        subtask_index = int(data["subtask_index"])
+        if (subtask := self.subtasks.get(subtask_index)) is None:
+            raise ValueError(f"{subtask_index=} not found in subtask mapping: {self.subtasks}")
+
+        return {**data, "subtask": subtask}
+
+
+@dataclasses.dataclass(frozen=True)
 class PadStatesAndActions(DataTransformFn):
     """Zero-pads states and actions to the model action dimension."""
 

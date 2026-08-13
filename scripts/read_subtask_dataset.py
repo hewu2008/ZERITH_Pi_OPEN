@@ -23,7 +23,6 @@ Example:
 
 from __future__ import annotations
 
-import dataclasses
 import os
 import sys
 from pathlib import Path
@@ -43,6 +42,7 @@ from lerobot.common.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatas
 from lerobot.common.datasets.utils import load_jsonlines
 
 import openpi.transforms as transforms
+from openpi.transforms import SubtaskFromLeRobotSubtask
 
 SUBTASKS_PATH = "meta/subtasks.jsonl"
 
@@ -60,29 +60,6 @@ def load_subtasks(dataset_root: Path) -> dict[int, str]:
         )
     items = load_jsonlines(fpath)
     return {item["subtask_index"]: item["subtask"] for item in sorted(items, key=lambda x: x["subtask_index"])}
-
-
-@dataclasses.dataclass(frozen=True)
-class SubtaskFromLeRobotSubtask(transforms.DataTransformFn):
-    """Inject the ``subtask`` string field from ``subtask_index``.
-
-    This is the subtask counterpart of ``PromptFromLeRobotTask``.  Place it in
-    the repack transforms (after ``PromptFromLeRobotTask``) so downstream
-    transforms such as ``TokenizePi05SubtaskInputs`` receive the ``subtask``
-    string they expect.
-    """
-
-    subtasks: dict[int, str]
-
-    def __call__(self, data: transforms.DataDict) -> transforms.DataDict:
-        if "subtask_index" not in data:
-            raise ValueError('Cannot extract subtask without "subtask_index"')
-
-        subtask_index = int(data["subtask_index"])
-        if (subtask := self.subtasks.get(subtask_index)) is None:
-            raise ValueError(f"{subtask_index=} not found in subtask mapping: {self.subtasks}")
-
-        return {**data, "subtask": subtask}
 
 
 def _resolve_dataset(data_path: str | None, repo_id: str | None) -> tuple[str, Path | None]:

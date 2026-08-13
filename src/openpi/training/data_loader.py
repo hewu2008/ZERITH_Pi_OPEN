@@ -1,4 +1,5 @@
 from collections.abc import Iterator, Sequence
+import json
 import logging
 import multiprocessing
 import os
@@ -148,6 +149,18 @@ def create_torch_dataset(
 
     if data_config.prompt_from_task:
         dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
+
+    if data_config.prompt_from_subtask:
+        subtasks_path = dataset_meta.root / "meta" / "subtasks.jsonl"
+        if not subtasks_path.exists():
+            raise FileNotFoundError(
+                f"subtasks.jsonl not found at {subtasks_path}. "
+                "Ensure the dataset was created with subtask annotations."
+            )
+        with open(subtasks_path) as f:
+            subtask_items = [json.loads(line) for line in f if line.strip()]
+        subtasks = {item["subtask_index"]: item["subtask"] for item in subtask_items}
+        dataset = TransformedDataset(dataset, [_transforms.SubtaskFromLeRobotSubtask(subtasks)])
 
     return dataset
 
