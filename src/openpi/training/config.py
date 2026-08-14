@@ -730,10 +730,12 @@ _CONFIGS = [
     ),
 
     TrainConfig(
-        name="pi05_zerith_subtask",
+        name="pi05_lora_subtask_zerith",
         model=pi0_config.Pi0Config(
             action_horizon=30,
             pi05=True,
+            paligemma_variant="gemma_2b_lora", 
+            action_expert_variant="gemma_300m_lora",
             discrete_state_input=False,
             train_subtask_prediction=True,
             sample_subtask_prediction=True,
@@ -766,8 +768,17 @@ _CONFIGS = [
         log_interval=10,
         save_interval=1000,
         num_train_steps=30000,
+        freeze_filter=pi0_config.Pi0Config(
+            action_horizon=30,
+            pi05=True,
+            paligemma_variant="gemma_2b_lora", 
+            action_expert_variant="gemma_300m_lora",
+            discrete_state_input=False,
+            train_subtask_prediction=True,
+            sample_subtask_prediction=True,
+        ).get_freeze_filter(),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-        ema_decay=0.999,
+        ema_decay=None,
     ),
 
     TrainConfig(
