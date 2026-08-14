@@ -16,7 +16,7 @@ import numpy as np
 import optax
 import torch
 import tqdm_loggable.auto as tqdm
-import wandb
+import trackio
 
 import openpi.models.model as _model
 import openpi.shared.array_typing as at
@@ -56,25 +56,26 @@ def init_logging():
 
 def init_wandb(config: _config.TrainConfig, *, resuming: bool, log_code: bool = False, enabled: bool = True):
     if not enabled:
-        wandb.init(mode="disabled")
         return
 
     ckpt_dir = config.checkpoint_dir
     if not ckpt_dir.exists():
         raise FileNotFoundError(f"Checkpoint directory {ckpt_dir} does not exist.")
     if resuming:
-        run_id = (ckpt_dir / "wandb_id.txt").read_text().strip()
-        wandb.init(id=run_id, resume="must", project=config.project_name)
+        run_id = (ckpt_dir / "trackio_id.txt").read_text().strip()
+        trackio.init(
+            project=config.project_name,
+            name=run_id,
+            config=dataclasses.asdict(config),
+            resume="must",
+        )
     else:
-        wandb.init(
+        run = trackio.init(
+            project=config.project_name,
             name=config.exp_name,
             config=dataclasses.asdict(config),
-            project=config.project_name,
         )
-        (ckpt_dir / "wandb_id.txt").write_text(wandb.run.id)
-
-    if log_code:
-        wandb.run.log_code(epath.Path(__file__).parent.parent)
+        (ckpt_dir / "trackio_id.txt").write_text(run.name)
 
 
 def _load_weights_and_validate(loader: _weight_loaders.WeightLoader, params_shape: at.Params) -> at.Params:
@@ -369,10 +370,10 @@ def main(config: _config.TrainConfig):
 
     # Log images from first batch to sanity check.
     images_to_log = [
-        wandb.Image(np.concatenate([np.array(img[i]) for img in batch[0].images.values()], axis=1))
+        trackio.Image(np.concatenate([np.array(img[i]) for img in batch[0].images.values()], axis=1))
         for i in range(min(5, len(next(iter(batch[0].images.values())))))
     ]
-    wandb.log({"camera_views": images_to_log}, step=0)
+    trackio.log({"camera_views": images_to_log}, step=0)
 
     train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
     jax.block_until_ready(train_state)
@@ -438,7 +439,7 @@ def main(config: _config.TrainConfig):
                 for k, v in reduced_info.items()
             )
             pbar.write(f"Step {step}: {info_str}, mae_denoise_time={mae_dt:.3f}s")
-            wandb.log(reduced_info, step=step)
+            trackio.log(reduced_info, step=step)
             infos = []
         batch = next(data_iter)
 
@@ -451,11 +452,12 @@ def main(config: _config.TrainConfig):
                 checkpoint_manager.wait_until_finished()
                 eval_metrics = run_open_loop_eval(config, str(config.checkpoint_dir), step)
                 if eval_metrics:
-                    wandb.log(eval_metrics, step=step)
+                    trackio.log(eval_metrics, step=step)
                     pbar.write(f"Step {step} eval: {', '.join(f'{k}={v:.6f}' for k, v in eval_metrics.items())}")
 
     logging.info("Waiting for checkpoint manager to finish")
     checkpoint_manager.wait_until_finished()
+    trackio.finish()
 
 
 if __name__ == "__main__":
