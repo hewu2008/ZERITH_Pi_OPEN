@@ -56,9 +56,12 @@ def create_torch_dataloader(
     # of frames).  For norm stats we only need state/actions, so we drop image columns
     # from the underlying HF dataset (lazy schema update — no data reprocessing) and
     # insert tiny 1×1 dummy images via AddDummyImages before the repack transform.
-    # create_torch_dataset may wrap the LeRobotDataset in a TransformedDataset, so
-    # unwrap to access .meta and .hf_dataset on the actual LeRobotDataset.
-    base = dataset._dataset if hasattr(dataset, "_dataset") else dataset
+    # create_torch_dataset may wrap the LeRobotDataset in multiple TransformedDataset
+    # layers (e.g. PromptFromLeRobotTask + SubtaskFromLeRobotSubtask), so unwrap
+    # recursively until we reach the underlying LeRobotDataset exposing .meta/.hf_dataset.
+    base = dataset
+    while hasattr(base, "_dataset") and not hasattr(base, "meta"):
+        base = base._dataset
     image_keys = [
         k for k in base.meta.features
         if base.meta.features[k]["dtype"] in ("image", "video")

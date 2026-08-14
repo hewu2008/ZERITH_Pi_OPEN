@@ -746,7 +746,7 @@ _CONFIGS = [
                 # Normalization stats are loaded from <assets_dir>/<asset_id>/norm_stats.json.
                 # The asset_id can match repo_id, or point to another robot/task's stats when reusing assets.
                 assets_dir="./assets",
-                asset_id="hewu2008/clear_the_bin_box_20260720_v1",
+                asset_id="hewu2008/clear_the_bin_box_20260721_v2",
             ),
             base_config=DataConfig(
                 local_files_only=True,
