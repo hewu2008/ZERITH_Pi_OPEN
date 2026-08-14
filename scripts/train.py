@@ -441,7 +441,8 @@ def main(config: _config.TrainConfig):
                 for k, v in reduced_info.items()
             )
             pbar.write(f"Step {step}: {info_str}, mae_denoise_time={mae_dt:.3f}s")
-            trackio.log(reduced_info, step=step)
+            # Convert all values to Python floats for trackio JSON serialization
+            trackio.log({k: float(v) for k, v in reduced_info.items()}, step=step)
             infos = []
         batch = next(data_iter)
 
