@@ -131,7 +131,10 @@ def evaluate_single_trajectory(
         infer_start = time.time()
         result = policy.infer(obs)
         infer_time = time.time() - infer_start
-        logging.info("Infer time: %.4fs", infer_time)
+        logging.info("Infer time: %.4fs, result keys: %s", infer_time, list(result.keys()))
+
+        if "subtask" in result:
+            logging.info("Generated subtask: %s", result["subtask"])
 
         pred_action_chunk = result["actions"]
         if pred_action_chunk.ndim == 1:
@@ -189,6 +192,7 @@ def main(
         default_prompt=default_prompt,
     )
     logging.info("Policy created successfully")
+    logging.info("config.sample_subtask_prediction: %s", config.model.sample_subtask_prediction)
 
     action_horizon = config.model.action_horizon
     logging.info("Action horizon: %d", action_horizon)
