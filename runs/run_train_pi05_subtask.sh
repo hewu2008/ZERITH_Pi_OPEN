@@ -11,7 +11,7 @@ mkdir -p "$LOG_DIR"
 
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 \
 python scripts/train.py pi05_zerith_subtask \
-  --exp_name clear_the_bin_box_20260720_v2_5e-5_30k_bs16_ah30_pi05_full \
+  --exp_name clear_the_bin_box_20260721_v2_5e-5_30k_bs16_ah30_pi05_full \
   --eval_data_path /data/4T-1/hewu/dataset/hewu2008/clear_the_bin_box_20260721_v2 \
   --eval_traj_ids 0 1 2 3 \
   --eval_max_infer_time 40 \
