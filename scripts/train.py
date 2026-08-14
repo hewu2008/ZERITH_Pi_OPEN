@@ -433,7 +433,10 @@ def main(config: _config.TrainConfig):
             mae = float(mae)
             mae_dt = time.perf_counter() - mae_start
             reduced_info["mae"] = mae
-            info_str = ", ".join(f"{k}={v:.6f}" for k, v in reduced_info.items())
+            info_str = ", ".join(
+                f"{k}={v:.6f}" if np.issubdtype(np.asarray(v).dtype, np.number) else f"{k}={v}"
+                for k, v in reduced_info.items()
+            )
             pbar.write(f"Step {step}: {info_str}, mae_denoise_time={mae_dt:.3f}s")
             wandb.log(reduced_info, step=step)
             infos = []
