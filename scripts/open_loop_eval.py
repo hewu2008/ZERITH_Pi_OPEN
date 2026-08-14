@@ -131,10 +131,11 @@ def evaluate_single_trajectory(
         infer_start = time.time()
         result = policy.infer(obs)
         infer_time = time.time() - infer_start
-        logging.info("Infer time: %.4fs, result keys: %s", infer_time, list(result.keys()))
 
         if "subtask" in result:
-            logging.info("Generated subtask: %s", result["subtask"])
+            logging.info("Infer time: %.4fs, subtask: %s", infer_time, result["subtask"])
+        else:
+            logging.info("Infer time: %.4fs", infer_time)
 
         pred_action_chunk = result["actions"]
         if pred_action_chunk.ndim == 1:
