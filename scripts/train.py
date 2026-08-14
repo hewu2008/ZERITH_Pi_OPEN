@@ -65,6 +65,7 @@ def init_wandb(config: _config.TrainConfig, *, resuming: bool, log_code: bool = 
         run_id = (ckpt_dir / "trackio_id.txt").read_text().strip()
         trackio.init(
             project=config.project_name,
+            server_url="http://localhost:7861?write_token=_UqRTabylWUCR78nLxU5O7kP2TBmJ2JxaG85FBb2gec",
             name=run_id,
             config=dataclasses.asdict(config),
             resume="must",
@@ -72,6 +73,7 @@ def init_wandb(config: _config.TrainConfig, *, resuming: bool, log_code: bool = 
     else:
         run = trackio.init(
             project=config.project_name,
+            server_url="http://localhost:7861?write_token=_UqRTabylWUCR78nLxU5O7kP2TBmJ2JxaG85FBb2gec",
             name=config.exp_name,
             config=dataclasses.asdict(config),
         )
