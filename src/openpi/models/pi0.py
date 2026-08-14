@@ -238,6 +238,18 @@ class Pi0(_model.BaseModel):
     def compute_loss(
         self, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions, *, train: bool = False
     ) -> at.Float[at.Array, "*b ah"]:
+        return self.compute_loss_with_breakdown(rng, observation, actions, train=train)[0]
+
+    def compute_loss_with_breakdown(
+        self, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions, *, train: bool = False
+    ) -> tuple[at.Float[at.Array, "*b ah"], dict[str, at.Float[at.Array, ""]]]:
+        """Compute per-sample loss plus scalar breakdown (action_loss, subtask_loss) for logging.
+
+        Returns:
+            (total_loss_per_sample, {"action_loss": mean, "subtask_loss": mean})
+            - total_loss_per_sample has shape (*b, ah) and is what `compute_loss` returns.
+            - subtask_loss is 0 when `train_subtask_prediction` is disabled.
+        """
         preprocess_rng, noise_rng, time_rng = jax.random.split(rng, 3)
         observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
 
@@ -261,10 +273,13 @@ class Pi0(_model.BaseModel):
         v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
 
         action_loss = jnp.mean(jnp.square(v_t - u_t), axis=-1)
+        action_loss_mean = jnp.mean(action_loss)
         if not self.train_subtask_prediction:
-            return action_loss
+            return action_loss, {"action_loss": action_loss_mean, "subtask_loss": jnp.zeros_like(action_loss_mean)}
         subtask_loss = self._compute_subtask_loss(prefix_out, observation)
-        return action_loss + self.subtask_loss_weight * subtask_loss[:, None]
+        subtask_loss_mean = jnp.mean(subtask_loss)
+        total = action_loss + self.subtask_loss_weight * subtask_loss[:, None]
+        return total, {"action_loss": action_loss_mean, "subtask_loss": subtask_loss_mean}
 
     def _compute_subtask_loss(
         self, prefix_out: at.Float[at.Array, "b s emb"], observation: _model.Observation
