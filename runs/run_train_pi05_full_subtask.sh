@@ -5,7 +5,7 @@ LOG_DIR="logs"
 export LEROBOT_HOME=/data/4T-1/hewu/dataset
 export PYTHONUNBUFFERED=1
 
-export CUDA_VISIBLE_DEVICES=0,1
+export CUDA_VISIBLE_DEVICES=0
 
 mkdir -p "$LOG_DIR"
 
