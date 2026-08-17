@@ -9,7 +9,7 @@ export CUDA_VISIBLE_DEVICES=0
 
 mkdir -p "$LOG_DIR"
 
-XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 \
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.35 \
 python scripts/train.py pi05_full_subtask_zerith \
   --exp_name clear_the_bin_box_20260720_v2_1e-4_30k_bs16_ah30_pi05_full \
   --eval_data_path /data/4T-1/hewu/dataset/hewu2008/clear_the_bin_box_20260721_v2 \
