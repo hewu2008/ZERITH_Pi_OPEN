@@ -19,6 +19,11 @@ from lerobot.common.datasets.lerobot_dataset import LeRobotDatasetMetadata, LeRo
 from openpi.policies import policy_config as _policy_config
 from openpi.training import config as _config
 
+# Cache Siglip vision encoder output during subtask autoregressive sampling.
+# Images don't change across 64 generation steps, so encoding them once saves ~90% compute.
+import scripts.subtask_vision_cache as _vision_cache
+_vision_cache.patch()
+
 
 def _to_numpy(value) -> np.ndarray:
     if isinstance(value, torch.Tensor):
@@ -132,10 +137,23 @@ def evaluate_single_trajectory(
         result = policy.infer(obs)
         infer_time = time.time() - infer_start
 
+        # Extract model-internal timing from policy_timing if available
+        model_ms = 0.0
+        if "policy_timing" in result:
+            model_ms = result["policy_timing"].get("infer_ms", 0.0)
+            del result["policy_timing"]
+        transform_ms = max(0.0, infer_time * 1000 - model_ms)
+
         if "subtask" in result:
-            logging.info("Infer time: %.4fs, subtask: %s", infer_time, result["subtask"])
+            logging.info(
+                "Infer time: %.4fs [model: %.1fms, transforms: %.1fms], subtask: %s",
+                infer_time, model_ms, transform_ms, result["subtask"],
+            )
         else:
-            logging.info("Infer time: %.4fs", infer_time)
+            logging.info(
+                "Infer time: %.4fs [model: %.1fms, transforms: %.1fms]",
+                infer_time, model_ms, transform_ms,
+            )
 
         pred_action_chunk = result["actions"]
         if pred_action_chunk.ndim == 1:
