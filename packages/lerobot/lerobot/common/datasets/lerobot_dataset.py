@@ -548,6 +548,11 @@ class LeRobotDataset(torch.utils.data.Dataset):
 
     def load_hf_dataset(self) -> datasets.Dataset:
         """hf_dataset contains all the observations, states, actions, rewards, etc."""
+        # Patch datasets 3.x to accept legacy "List" feature type (renamed to "Sequence" in datasets 3.x).
+        import datasets.features.features as _ds_feats
+        if "List" not in _ds_feats._FEATURE_TYPES:
+            _ds_feats._FEATURE_TYPES["List"] = _ds_feats.Sequence
+
         if self.episodes is None:
             path = str(self.root / "data")
             hf_dataset = load_dataset("parquet", data_dir=path, split="train")
