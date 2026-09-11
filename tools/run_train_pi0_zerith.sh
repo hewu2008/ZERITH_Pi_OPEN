@@ -7,4 +7,5 @@ export LEROBOT_HOME=/data/4T-1/hewu/dataset
 python scripts/train.py pi0_zerith \
   --project_name openpi_zerith \
   --exp_name clear_the_bin_box_20260720_v2_30k_lr1e-5_bs8_ah50_pi0_full \
-  --overwrite
+  --num_workers 4 \
+  --overwrite 2>&1 | tee -a logs/train_log_pi0_full.log

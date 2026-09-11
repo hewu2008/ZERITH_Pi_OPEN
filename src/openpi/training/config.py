@@ -384,7 +384,7 @@ _CONFIGS = [
         # Checkpoints are saved to <checkpoint_base_dir>/<config name>/<exp_name>/.
         checkpoint_base_dir="./openpi_checkpoints",
         batch_size=8,
-        log_interval=10,
+        log_interval=1,
         save_interval=1000,
         num_train_steps=30000,
     ),
