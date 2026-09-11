@@ -353,32 +353,40 @@ class TrainConfig:
 _CONFIGS = [
     TrainConfig(
         # This name is used by compute_norm_stats.py, train.py, and serve_policy.py.
-        name="test",
-        model=pi0.Pi0Config(paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"),
+        name="pi0_zerith",
+        model=pi0.Pi0Config(paligemma_variant="gemma_2b_lora", action_horizon=50, action_expert_variant="gemma_300m"),
         data=LeRobotZerithJointDataConfig(
             # LeRobot stores the converted dataset under <LEROBOT_HOME>/<repo_id>.
             # Keep this value aligned with train.sh REPO_ID and the dataset path used during conversion.
-            repo_id="zerith/test",
+            repo_id="hewu2008/clear_the_bin_box_20260720_v2",
             assets=AssetsConfig(
                 # Normalization stats are loaded from <assets_dir>/<asset_id>/norm_stats.json.
                 # The asset_id can match repo_id, or point to another robot/task's stats when reusing assets.
                 assets_dir="./assets",
-                asset_id="zerith/test",
+                asset_id="hewu2008/clear_the_bin_box_20260720_v2",
             ),
             base_config=DataConfig(
                 local_files_only=True,
                 prompt_from_task=True,
             ),
         ),
-        weight_loader=weight_loaders.CheckpointWeightLoader("s3://openpi-assets/checkpoints/pi0_base/params"),
-        num_train_steps=30000,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1000,
+            peak_lr=1e-5,
+            decay_steps=30000,
+            decay_lr=1e-6,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/4T-1/hewu/model_zoo/pi0_base_params/params"),
         freeze_filter=pi0.Pi0Config(
-            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
+            paligemma_variant="gemma_2b_lora", action_horizon=50, action_expert_variant="gemma_300m"
         ).get_freeze_filter(),
         ema_decay=None,
         # Checkpoints are saved to <checkpoint_base_dir>/<config name>/<exp_name>/.
         checkpoint_base_dir="./openpi_checkpoints",
         batch_size=8,
+        log_interval=10,
+        save_interval=1000,
+        num_train_steps=30000,
     ),
 ]
 
