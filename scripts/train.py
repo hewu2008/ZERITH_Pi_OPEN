@@ -197,6 +197,7 @@ def train_step(
         "loss": loss,
         "grad_norm": optax.global_norm(grads),
         "param_norm": optax.global_norm(kernel_params),
+        "lr": config.lr_schedule.create()(state.step),
     }
     return new_state, info
 
