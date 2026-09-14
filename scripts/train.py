@@ -6,7 +6,7 @@ import platform
 from typing import Any
 import os
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"]="0.9"
-os.environ["WANDB_MODE"]="disabled"
+# os.environ["WANDB_MODE"]="disabled"
 import json
 import datetime
 import sys
