@@ -1,6 +1,7 @@
 import dataclasses
 import functools
 import logging
+import pathlib
 import platform
 from typing import Any
 import os
@@ -10,6 +11,8 @@ import json
 import datetime
 import sys
 
+import numpy as np
+
 import etils.epath as epath
 import flax.nnx as nnx
 from flax.training import common_utils
@@ -17,6 +20,7 @@ import flax.traverse_util as traverse_util
 import jax
 import jax.experimental
 import jax.numpy as jnp
+import matplotlib.image
 import optax
 import tqdm_loggable.auto as tqdm
 import wandb
@@ -31,6 +35,7 @@ import openpi.training.optimizer as _optimizer
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 import openpi.training.weight_loaders as _weight_loaders
+import openpi.transforms as _transforms
 
 
 def init_logging():
@@ -196,6 +201,47 @@ def train_step(
     return new_state, info
 
 
+def save_sanity_batch(out_dir: pathlib.Path, data_loader, observation, actions) -> None:
+    """Dump the (denormalized) input batch to disk for sanity debugging.
+
+    Saves both the raw physical values (inverse of the normalization applied by
+    `Normalize`) and the normalized values that are actually fed to the model, so the
+    data-preprocessing pipeline can be inspected by hand.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    data_config = data_loader.data_config()
+    unnorm = _transforms.Unnormalize(data_config.norm_stats, use_quantiles=data_config.use_quantile_norm)
+    # Reconstruct the pre-transform dict expected by the normalization transforms.
+    raw = unnorm({**observation.to_dict(), "actions": actions})
+    raw = jax.device_get(jax.tree.map(lambda x: np.asarray(x), raw))
+
+    def _to_np(x):
+        return jax.device_get(jax.tree.map(lambda y: np.asarray(y), x))
+
+    np.save(out_dir / "state.npy", _to_np(observation.state))
+    np.save(out_dir / "actions.npy", _to_np(actions))
+    np.save(out_dir / "raw_state.npy", raw["state"])
+    np.save(out_dir / "raw_actions.npy", raw["actions"])
+
+    # Save the model-observed camera images as PNGs for visual inspection.
+    img_dir = out_dir / "images"
+    img_dir.mkdir(parents=True, exist_ok=True)
+    for key, imgs in _to_np(observation.images).items():
+        imgs = imgs.astype(np.float32)
+        # The images fed to the model are in [-1, 1]; map back to [0, 255] uint8.
+        imgs = np.clip((imgs + 1.0) * 0.5 * 255.0, 0, 255).astype(np.uint8)
+        # Batched images may have a varying number of samples / layout; drop any leading
+        # batch dim of size 1 to keep one PNG per camera view.
+        imgs = np.squeeze(imgs, axis=0) if imgs.ndim > 3 and imgs.shape[0] == 1 else imgs
+        if imgs.ndim == 3:
+            matplotlib.image.imsave(img_dir / f"{key}.png", imgs)
+        else:
+            for b in range(imgs.shape[0]):
+                matplotlib.image.imsave(img_dir / f"{key}_{b}.png", imgs[b])
+    logging.info(f"Sanity: raw input batch saved to {out_dir}")
+
+
 def main(config: _config.TrainConfig):
     init_logging()
     logging.info(f"Running on: {platform.node()}")
@@ -226,11 +272,14 @@ def main(config: _config.TrainConfig):
         config,
         sharding=data_sharding,
         num_workers=config.num_workers,
-        shuffle=True,
+        shuffle=not config.sanity_mode,  # sanity uses a fixed, deterministic first batch.
     )
     data_iter = iter(data_loader)
     batch = next(data_iter)
     logging.info(f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}")
+
+    if config.sanity_mode:
+        save_sanity_batch(pathlib.Path(config.sanity_dump_dir), data_loader, batch[0], batch[1])
 
     train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
     jax.block_until_ready(train_state)
@@ -279,7 +328,9 @@ def main(config: _config.TrainConfig):
         if (step % config.save_interval == 0 and step > 0) or step == config.num_train_steps - 1:
             _checkpoints.save_state(checkpoint_manager, train_state, data_loader, step)
 
-        batch = next(data_iter)
+        # In sanity mode, keep training on the same fixed batch for every step.
+        if not config.sanity_mode:
+            batch = next(data_iter)
 
 
     logging.info("Waiting for checkpoint manager to finish")

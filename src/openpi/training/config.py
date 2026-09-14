@@ -336,6 +336,14 @@ class TrainConfig:
     # data parallel between 2 groups of devices.
     fsdp_devices: int = 1
 
+    # Sanity-check mode: reuse a single fixed batch for every step (never advance the
+    # data loader) and dump the raw (denormalized) input batch to the sanity_dump_dir.
+    # Intended for verifying that the training forward/backward runs reproducibly on a
+    # controlled input. Turn on only for debugging; not for real training.
+    sanity_mode: bool = False
+    # Directory (created on demand) where sanity raw inputs/outputs are saved.
+    sanity_dump_dir: str = "./sanity_dump"
+
     @property
     def assets_dirs(self) -> pathlib.Path:
         """Get the assets directory for this config."""

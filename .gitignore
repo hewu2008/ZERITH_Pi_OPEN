@@ -28,3 +28,6 @@ __pycache__/
 
 # ===== tools =====
 linux-bcecmd-*/
+
+# sanity check
+sanity_dump/
