@@ -270,6 +270,31 @@ class AbsoluteActions(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class ZeroDims(DataTransformFn):
+    """Zero out specific dimension indices of selected keys.
+
+    Used e.g. to discard noisy/no-command action dims (like a stationary chassis).
+    Apply it to both the training inputs (targets) and the inference outputs so the
+    model learns to always emit 0 for those dims.
+    """
+
+    # Dimension indices (non-negative) to zero out along the last axis.
+    dims: Sequence[int]
+    # Keys to zero the dims in.
+    keys: Sequence[str] = ("actions",)
+
+    def __call__(self, data: DataDict) -> DataDict:
+        for key in self.keys:
+            if key not in data:
+                continue
+            arr = np.asarray(data[key])
+            arr = arr.copy()
+            arr[..., np.asarray(self.dims)] = 0
+            data[key] = arr
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
 class TokenizePrompt(DataTransformFn):
     tokenizer: _tokenizer.PaligemmaTokenizer
 
