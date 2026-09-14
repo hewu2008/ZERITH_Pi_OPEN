@@ -358,12 +358,12 @@ _CONFIGS = [
         data=LeRobotZerithJointDataConfig(
             # LeRobot stores the converted dataset under <LEROBOT_HOME>/<repo_id>.
             # Keep this value aligned with train.sh REPO_ID and the dataset path used during conversion.
-            repo_id="hewu2008/clear_the_bin_box_20260720_v2",
+            repo_id="EmbodiedLab/clear_the_bin_box_20260910_v1",
             assets=AssetsConfig(
                 # Normalization stats are loaded from <assets_dir>/<asset_id>/norm_stats.json.
                 # The asset_id can match repo_id, or point to another robot/task's stats when reusing assets.
                 assets_dir="./assets",
-                asset_id="hewu2008/clear_the_bin_box_20260720_v1",
+                asset_id="EmbodiedLab/clear_the_bin_box_20260910_v1",
             ),
             base_config=DataConfig(
                 local_files_only=True,
@@ -373,7 +373,7 @@ _CONFIGS = [
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=1000,
             peak_lr=1e-5,
-            decay_steps=30000,
+            decay_steps=60000,
             decay_lr=1e-6,
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("/data/4T-1/hewu/model_zoo/pi0_base_params/params"),
@@ -386,7 +386,7 @@ _CONFIGS = [
         batch_size=8,
         log_interval=1,
         save_interval=1000,
-        num_train_steps=30000,
+        num_train_steps=60000,
     ),
 ]
 
