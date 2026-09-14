@@ -31,3 +31,6 @@ linux-bcecmd-*/
 
 # sanity check
 sanity_dump/
+
+# open-loop
+open_loop_test/
