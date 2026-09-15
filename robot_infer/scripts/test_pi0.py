@@ -216,7 +216,7 @@ def main(args):
     observation = env.reset().observation
     observation = env.get_observation().observation
 
-    for _ in range(args.num_steps):
+    for step in range(args.num_steps):
         observation["state"] = observation["qpos"]
 
         time0 = time.time()
@@ -232,6 +232,10 @@ def main(args):
         env.step_joint(action[:-2]).observation
         elapsed_time = time.time() - time0
         time.sleep(max(0, DT - elapsed_time))
+
+        if step % 60 == 59:
+            logging.info("step: %d", step)
+            pdb.set_trace()
 
     logging.info("Inference completed")
 
