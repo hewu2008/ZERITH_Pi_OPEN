@@ -95,9 +95,9 @@ class WebsocketClientPolicy(_base_policy.BasePolicy):
 
 class ActionSmooth:
     def __init__(self, client, max_timesteps: int) -> None:
-        self.action_horizon = 50
+        self.action_horizon = 10
         self.base_delay = 0
-        self.query_frequency = 30
+        self.query_frequency = 10
         self.all_time_actions = np.zeros(
             [max_timesteps, max_timesteps + self.action_horizon - self.base_delay, 23],
             dtype=np.float32,
@@ -174,19 +174,6 @@ def load_hdf5(ep_path):
     return action
 
 
-def force_gripper_close(action):
-    """Force the two gripper channels to a fixed closed value when commanded past the threshold."""
-    for idx in (7, 15):
-        if action[idx] > 0.5:
-            action[idx] = 0.3
-
-
-def pin_head_action(action, data_action):
-    """Pin the head joints to the reference pose from the initialization HDF5 frame."""
-    if data_action is not None:
-        action[-4:-2] = data_action[-4:-2]
-
-
 def main(args):
     env = make_real_env(camera_names=args.camera_names)
 
@@ -224,9 +211,13 @@ def main(args):
         action = np.copy(action_smooth.get_action(observation))
         observation = env.get_observation().observation
 
-        force_gripper_close(action)
-        if args.pin_head:
-            pin_head_action(action, data_action)
+        if action[7] > 0.35:
+            action[7] = 1.3
+        if action[15] > 0.35:
+            action[15] = 1.3
+
+        if data_action is not None:
+            action[-4:-2] = data_action[-4:-2]
 
         logging.info("action: %s", action)
         env.step_joint(action[:-2]).observation
@@ -245,13 +236,6 @@ if __name__ == "__main__":
     parser.add_argument("--warmup_steps", type=int, default=10, help="number of warmup inference calls")
     parser.add_argument("--init_hdf5", type=str, required=True, help="optional HDF5 file used for initialization")
     parser.add_argument("--init_frame_idx", type=int, default=0, help="frame index used from the initialization HDF5")
-    parser.add_argument(
-        "--no_pin_head",
-        dest="pin_head",
-        action="store_false",
-        default=True,
-        help="disable pinning the head joints to the HDF5 reference pose",
-    )
     parser.add_argument(
         "--camera_names",
         nargs="+",
