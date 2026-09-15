@@ -94,6 +94,10 @@ class WebsocketClientPolicy(_base_policy.BasePolicy):
 
 
 class ActionSmooth:
+    # Channels excluded from exponential smoothing, taken directly from the latest prediction:
+    # grippers (7, 15), head (19, 20) and base velocity (21, 22).
+    unsmoothed_channels = (7, 15, 19, 20, 21, 22)
+
     def __init__(self, client, max_timesteps: int) -> None:
         self.action_horizon = 50
         self.base_delay = 0
@@ -112,19 +116,20 @@ class ActionSmooth:
             self.all_time_actions[self.t, self.t : self.t + self.action_horizon - self.base_delay] = self.action_keep
 
         actions_for_curr_step = self.all_time_actions[:, self.t]
-        actions_populated = np.all(actions_for_curr_step != 0, axis=1)
+        actions_populated = np.any(actions_for_curr_step != 0, axis=1)
         actions_for_curr_step = actions_for_curr_step[actions_populated]
-        base_action = actions_for_curr_step[-1, 19:]
 
         k = 0.01
         exp_weights = np.exp(-k * np.arange(len(actions_for_curr_step)))
         exp_weights = exp_weights / np.sum(exp_weights)
         exp_weights = exp_weights[:, np.newaxis]
-        action = np.sum(actions_for_curr_step * exp_weights, axis=0, keepdims=True)
-        action = action.squeeze(0)
+        action = np.sum(actions_for_curr_step * exp_weights, axis=0)
+
+        unsmoothed = list(self.unsmoothed_channels)
+        action[unsmoothed] = actions_for_curr_step[-1, unsmoothed]
 
         self.t += 1
-        return np.concatenate([action[:19], base_action])
+        return action
 
 
 def prepare_observation(observation, client: WebsocketClientPolicy, camera_names: list[str], prompt: str):
@@ -177,8 +182,8 @@ def load_hdf5(ep_path):
 def force_gripper_close(action):
     """Force the two gripper channels to a fixed closed value when commanded past the threshold."""
     for idx in (7, 15):
-        if action[idx] > 0.5:
-            action[idx] = 0.3
+        if action[idx] > 0.4:
+            action[idx] = 1.3
 
 
 def pin_head_action(action, data_action):
