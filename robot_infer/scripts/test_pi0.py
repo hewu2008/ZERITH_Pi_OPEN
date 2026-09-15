@@ -182,7 +182,7 @@ def load_hdf5(ep_path):
 def force_gripper_close(action):
     """Force the two gripper channels to a fixed closed value when commanded past the threshold."""
     for idx in (7, 15):
-        if action[idx] > 0.4:
+        if action[idx] > 0.5:
             action[idx] = 1.3
 
 
