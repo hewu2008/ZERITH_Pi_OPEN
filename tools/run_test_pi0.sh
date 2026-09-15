@@ -1,6 +1,6 @@
 #!/bin/bash
 
-python robot_infer/scripts/test_pi0.py \
+sudo /home/robot/miniconda3/envs/pi0/bin/python robot_infer/scripts/test_pi0.py \
   --host 10.42.0.1 \
   --port 55555 \
   --no_pin_head \
