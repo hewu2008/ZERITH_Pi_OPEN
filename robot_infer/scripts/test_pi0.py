@@ -101,7 +101,7 @@ class ActionSmooth:
     def __init__(self, client, max_timesteps: int) -> None:
         self.action_horizon = 50
         self.base_delay = 0
-        self.query_frequency = 30
+        self.query_frequency = 15
         self.all_time_actions = np.zeros(
             [max_timesteps, max_timesteps + self.action_horizon - self.base_delay, 23],
             dtype=np.float32,
@@ -182,7 +182,7 @@ def load_hdf5(ep_path):
 def force_gripper_close(action):
     """Force the two gripper channels to a fixed closed value when commanded past the threshold."""
     for idx in (7, 15):
-        if action[idx] > 0.5:
+        if action[idx] > 0.45:
             action[idx] = 1.3
 
 
@@ -238,9 +238,9 @@ def main(args):
         elapsed_time = time.time() - time0
         time.sleep(max(0, DT - elapsed_time))
 
-        if step % 60 == 59:
-            logging.info("step: %d", step)
-            pdb.set_trace()
+        # if step % 60 == 59:
+        #     logging.info("step: %d", step)
+        #     pdb.set_trace()
 
     logging.info("Inference completed")
 
