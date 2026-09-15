@@ -143,9 +143,6 @@ def evaluate_single_trajectory(
         if gt_action_chunk.ndim == 1:
             gt_action_chunk = gt_action_chunk[np.newaxis, :]
 
-        gt_action_chunks.append(gt_action_chunk)
-        state_joints_chunks.append(obs["state"])
-
         infer_start = time.time()
         result = policy.infer(obs)
         infer_time = time.time() - infer_start
@@ -156,7 +153,13 @@ def evaluate_single_trajectory(
         if pred_action_chunk.ndim == 1:
             pred_action_chunk = pred_action_chunk[np.newaxis, :]
 
-        pred_action_chunks.append(pred_action_chunk)
+        # The model always predicts `config.action_horizon` frames, while the
+        # ground-truth window sampled from the dataset has `action_horizon` frames.
+        # Align the two per-chunk so they can be compared frame by frame.
+        n_frames = min(len(gt_action_chunk), len(pred_action_chunk))
+        gt_action_chunks.append(gt_action_chunk[:n_frames])
+        pred_action_chunks.append(pred_action_chunk[:n_frames])
+        state_joints_chunks.append(obs["state"][:n_frames])
         count += 1
 
         if count >= max_infer_time:
@@ -197,6 +200,7 @@ def main(
     traj_ids: list[int],
     save_plot_path: str,
     max_infer_time: int,
+    action_horizon: int | None = None,
     default_prompt: str | None = None,
 ):
     config = _config.get_config(config_name)
@@ -209,7 +213,8 @@ def main(
     )
     logging.info("Policy created successfully")
 
-    action_horizon = config.model.action_horizon
+    if action_horizon is None:
+        action_horizon = config.model.action_horizon
     logging.info("Action horizon: %d", action_horizon)
 
     data_path = Path(data_path)
@@ -297,6 +302,12 @@ if __name__ == "__main__":
         help="Max number of action chunks to infer per trajectory",
     )
     parser.add_argument(
+        "--action_horizon",
+        type=int,
+        default=50,
+        help="Action horizon used for data sampling cadence (must match training)",
+    )
+    parser.add_argument(
         "--save_plot_path",
         type=str,
         default="./open_loop_test/",
@@ -321,5 +332,6 @@ if __name__ == "__main__":
         traj_ids=args.traj_ids,
         save_plot_path=args.save_plot_path,
         max_infer_time=args.max_infer_time,
+        action_horizon=args.action_horizon,
         default_prompt=args.default_prompt,
     )
