@@ -209,28 +209,48 @@ def load_hdf5(ep_path):
 
 class GripperHysteresis:
     """Hysteresis for gripper close commands: enter closed above the close threshold,
-    only reopen when the prediction drops below the open threshold."""
+    only reopen when the prediction drops below the open threshold.
+    Both transitions must hold for a number of consecutive control steps (time debounce)
+    to filter out transient threshold crossings."""
 
     closed_value = 1.3
     # Per-channel thresholds: left gripper (channel 7), right gripper (channel 15).
+    # close_steps/open_steps are debounce durations in control steps (~33ms each at 30Hz).
     channel_config = {
-        7: {"close": 0.45, "open": 0.45},
-        15: {"close": 0.45, "open": 0.45},
+        7: {"close": 0.45, "open": 0.45, "close_steps": 1, "open_steps": 5},
+        15: {"close": 0.45, "open": 0.45, "close_steps": 1, "open_steps": 5},
     }
 
     def __init__(self) -> None:
         self._closed = {idx: False for idx in self.channel_config}
+        self._close_counts = {idx: 0 for idx in self.channel_config}
+        self._open_counts = {idx: 0 for idx in self.channel_config}
 
     def apply(self, action):
         for idx, config in self.channel_config.items():
             if self._closed[idx]:
                 if action[idx] < config["open"]:
+                    self._open_counts[idx] += 1
+                else:
+                    self._open_counts[idx] = 0
+
+                if self._open_counts[idx] >= config["open_steps"]:
                     self._closed[idx] = False
+                    self._open_counts[idx] = 0
+                    self._close_counts[idx] = 0
                 else:
                     action[idx] = self.closed_value
-            elif action[idx] > config["close"]:
-                self._closed[idx] = True
-                action[idx] = self.closed_value
+            else:
+                if action[idx] > config["close"]:
+                    self._close_counts[idx] += 1
+                else:
+                    self._close_counts[idx] = 0
+
+                if self._close_counts[idx] >= config["close_steps"]:
+                    self._closed[idx] = True
+                    self._close_counts[idx] = 0
+                    self._open_counts[idx] = 0
+                    action[idx] = self.closed_value
 
 
 def pin_head_action(action, data_action):
