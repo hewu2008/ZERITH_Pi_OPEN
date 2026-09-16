@@ -284,12 +284,18 @@ def main(args):
     logging.info("First action chunk received")
 
     gripper = GripperHysteresis()
+    recorded_actions = [] if args.save_actions else None
 
     def control_step(step):
         observation = env.get_observation().observation
         observation["state"] = observation["qpos"]
         observation = prepare_observation(observation, openpi_client, args.camera_names, args.prompt)
         action = action_smooth.get_action(observation)
+
+        if recorded_actions is not None:
+            recorded_actions.append(
+                action if action is not None else np.full(23, np.nan, dtype=np.float32)
+            )
 
         if action is None:
             logging.warning("step %d: no action available, holding current pose", step)
@@ -308,9 +314,14 @@ def main(args):
         if result_age is not None and result_age > args.watchdog_timeout:
             logging.error("Inference stalled for %.1fs", result_age)
 
-    run_rtc_loop(control_step, args.control_freq, args.num_steps)
+    try:
+        run_rtc_loop(control_step, args.control_freq, args.num_steps)
+    finally:
+        if recorded_actions:
+            np.save(args.save_actions, np.stack(recorded_actions).astype(np.float32))
+            logging.info("Saved %d steps of smoothed actions to %s", len(recorded_actions), args.save_actions)
 
-    worker.stop()
+        worker.stop()
     stats = worker.stats()
     if stats is not None:
         count, mean_time, max_time = stats
@@ -331,6 +342,12 @@ if __name__ == "__main__":
     parser.add_argument("--prompt", type=str, default=DEFAULT_PROMPT, help="language instruction")
     parser.add_argument("--num_steps", type=int, default=20000, help="number of control steps")
     parser.add_argument("--warmup_steps", type=int, default=10, help="number of warmup inference calls")
+    parser.add_argument(
+        "--save_actions",
+        type=str,
+        default="",
+        help="path to save per-step smoothed actions as .npy (empty to disable)",
+    )
     parser.add_argument("--control_freq", type=float, default=30.0, help="real-time control loop frequency in Hz")
     parser.add_argument(
         "--query_frequency",
