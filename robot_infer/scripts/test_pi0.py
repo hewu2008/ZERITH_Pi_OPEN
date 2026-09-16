@@ -207,11 +207,30 @@ def load_hdf5(ep_path):
     return action
 
 
-def force_gripper_close(action):
-    """Force the two gripper channels to a fixed closed value when commanded past the threshold."""
-    for idx in (7, 15):
-        if action[idx] > 0.45:
-            action[idx] = 1.3
+class GripperHysteresis:
+    """Hysteresis for gripper close commands: enter closed above the close threshold,
+    only reopen when the prediction drops below the open threshold."""
+
+    closed_value = 1.3
+    # Per-channel thresholds: left gripper (channel 7), right gripper (channel 15).
+    channel_config = {
+        7: {"close": 0.45, "open": 0.45},
+        15: {"close": 0.45, "open": 0.45},
+    }
+
+    def __init__(self) -> None:
+        self._closed = {idx: False for idx in self.channel_config}
+
+    def apply(self, action):
+        for idx, config in self.channel_config.items():
+            if self._closed[idx]:
+                if action[idx] < config["open"]:
+                    self._closed[idx] = False
+                else:
+                    action[idx] = self.closed_value
+            elif action[idx] > config["close"]:
+                self._closed[idx] = True
+                action[idx] = self.closed_value
 
 
 def pin_head_action(action, data_action):
@@ -264,6 +283,8 @@ def main(args):
         raise RuntimeError(f"Timed out waiting for the first action chunk after {FIRST_CHUNK_TIMEOUT:.0f}s")
     logging.info("First action chunk received")
 
+    gripper = GripperHysteresis()
+
     def control_step(step):
         observation = env.get_observation().observation
         observation["state"] = observation["qpos"]
@@ -276,7 +297,7 @@ def main(args):
             return
 
         action = np.copy(action)
-        force_gripper_close(action)
+        gripper.apply(action)
         if args.pin_head:
             pin_head_action(action, data_action)
 
