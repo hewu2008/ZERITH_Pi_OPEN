@@ -97,8 +97,9 @@ class WebsocketClientPolicy(_base_policy.BasePolicy):
 
 class ActionSmooth:
     # Channels excluded from exponential smoothing, taken directly from the latest prediction:
-    # grippers (7, 15), head (19, 20) and base velocity (21, 22).
-    unsmoothed_channels = (7, 15, 19, 20, 21, 22)
+    # head (19, 20) and base velocity (21, 22). Grippers (7, 15) are smoothed together
+    # with the arm channels (k = 0.01).
+    unsmoothed_channels = (19, 20, 21, 22)
 
     def __init__(self, worker: InferenceWorker, max_timesteps: int, query_frequency: int = 15) -> None:
         self.action_horizon = 50
@@ -217,8 +218,8 @@ class GripperHysteresis:
     # Per-channel thresholds: left gripper (channel 7), right gripper (channel 15).
     # close_steps/open_steps are debounce durations in control steps (~33ms each at 30Hz).
     channel_config = {
-        7: {"close": 0.45, "open": 0.45, "close_steps": 1, "open_steps": 5},
-        15: {"close": 0.45, "open": 0.45, "close_steps": 1, "open_steps": 5},
+        7: {"close": 0.45, "open": 0.2, "close_steps": 1, "open_steps": 1},
+        15: {"close": 0.45, "open": 0.2, "close_steps": 1, "open_steps": 1},
     }
 
     def __init__(self) -> None:
