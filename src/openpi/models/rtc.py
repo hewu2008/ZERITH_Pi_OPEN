@@ -34,7 +34,6 @@ from __future__ import annotations
 import logging
 import math
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -97,45 +96,3 @@ def guidance_scale(time, beta: float):
     t = jnp.asarray(time, dtype=jnp.float32)
     raw = (t**2 + (1.0 - t) ** 2) / (t * (1.0 - t))
     return jnp.minimum(jnp.asarray(beta, dtype=jnp.float32), raw)
-
-
-def guided_step(velocity_fn, x_t, time, prev, weights, beta: float, *, use_vjp: bool = True):
-    """One RTC-guided denoising step (paper Algorithm 1, `GuidedInference`).
-
-    Args:
-        velocity_fn: Callable mapping `x` (b, H, A) to the flow velocity
-            `v(x)` (b, H, A). Must be jax-traceable; everything it closes over
-            (kv cache, observation) is treated as a constant.
-        x_t: Current noisy actions (b, H, A), float32.
-        time: Scalar flow-matching time in (0, 1] (openpi convention).
-        prev: Padded previous-chunk leftover aligned with `x_t`, (b, H, A).
-        weights: Prefix attention weights broadcastable to (b, H, A).
-        beta: Maximum guidance weight.
-        use_vjp: If True, compute the exact VJP `(I - t*dv/dx)^T @ err`
-            (paper Eq. pigdm1). If False, use the identity-Jacobian
-            approximation `correction = err` (the legacy torch behavior,
-            zero backward cost) as an A/B baseline.
-
-    Returns:
-        The guided velocity `v_t - w * correction`, same shape as `v_t`.
-    """
-
-    def f(x):
-        v = velocity_fn(x)
-        return (x - time * v, v)
-
-    if not use_vjp:
-        v_t = velocity_fn(x_t)
-        x1_t = x_t - time * v_t
-        err = (prev - x1_t) * weights
-        correction = err
-    else:
-        (x1_t, v_t), vjp_fn = jax.vjp(f)(x_t)
-        err = (prev - x1_t) * weights
-        # Cotangent (err, 0): the gradient wrt the second output (`v_t`) is
-        # zero, so this computes exactly `(d x1_t / d x_t)^T @ err`, i.e. the
-        # full Jacobian transpose of Eq. pigdm1 rather than the degenerate
-        # identity the torch reference produced.
-        (correction,) = vjp_fn((err, jnp.zeros_like(v_t)))
-
-    return v_t - guidance_scale(time, beta) * correction

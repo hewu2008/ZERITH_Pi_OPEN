@@ -400,7 +400,7 @@ class Pi0(_model.BaseModel):
                     v = self.suffix_velocity(observation, x, time, kv_cache, prefix_mask)
                     return (x - time * v, v)
 
-                (x1_t, v_t), vjp_fn = jax.vjp(f)(x_t)
+                (x1_t, v_t), vjp_fn = jax.vjp(f, x_t)
                 err = (prev_actions - x1_t) * action_weights
                 (correction,) = vjp_fn((err, jnp.zeros_like(v_t)))
             else:
