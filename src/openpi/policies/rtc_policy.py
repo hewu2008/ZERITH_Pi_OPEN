@@ -115,9 +115,12 @@ class RTCPolicy(_policy.Policy):
         self._model = model
         self._rtc_config = rtc_config
         # static_argnames: num_steps/guidance_steps unroll the Python loop at
-        # trace time and must not become traced scalars.
+        # trace time and must not become traced scalars. beta is fixed by the
+        # frozen rtc_config at startup, so keep it static too: jax.jit would
+        # otherwise hand a traced scalar to the `beta: float` typecheck in
+        # `guided_sample_actions` and beartype would reject it.
         self._guided_sample_actions = nnx_utils.module_jit(
-            model.guided_sample_actions, static_argnames=("num_steps", "guidance_steps")
+            model.guided_sample_actions, static_argnames=("beta", "num_steps", "guidance_steps")
         )
         self._metadata = {
             **(metadata or {}),

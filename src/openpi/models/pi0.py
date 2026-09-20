@@ -367,7 +367,9 @@ class Pi0(_model.BaseModel):
         zero backward cost). This trades guidance accuracy for latency; the
         default (`None`) applies the exact VJP at every step. `num_steps` and
         `guidance_steps` must stay static (they unroll the loop at trace
-        time); `beta` may be traced.
+        time). `beta` must stay a Python `float`: `@at.typecheck` rejects
+        traced scalars, so callers that jit this method must list `beta` in
+        `static_argnames` (see `RTCPolicy`).
         """
         observation = _model.preprocess_observation(None, observation, train=False)
         dt = -1.0 / num_steps
