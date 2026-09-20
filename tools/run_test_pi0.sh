@@ -1,4 +1,10 @@
 #!/bin/bash
+#
+# RTC guidance is disabled by default (ActionSmooth time-integration, current
+# behavior). To enable it, append e.g.:
+#   --rtc --s_min 15
+# The client refuses to start RTC mode against a server that does not
+# advertise RTC support (start the server with --rtc.enabled).
 
 sudo /home/robot/miniconda3/envs/lingbot-va/bin/python robot_infer/scripts/test_pi0.py \
   --host 10.42.0.1 \

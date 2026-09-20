@@ -26,6 +26,8 @@ sys.path.insert(0, project_root)
 from utils.async_infer import InferenceWorker
 from utils.async_infer import run_rtc_loop
 from utils.real_env_sdk import make_real_env
+from utils.rtc_client import RTCScheduler
+from utils.rtc_client import validate_server_metadata
 
 
 DEFAULT_PROMPT = "grab all the ducks and put them into the basket"
@@ -268,16 +270,29 @@ def main(args):
 
     openpi_client = WebsocketClientPolicy(host=args.host, port=args.port)
 
+    if args.rtc:
+        # Refuse to start RTC mode against a server that does not advertise it,
+        # instead of silently degrading to plain inference.
+        rtc_info = validate_server_metadata(openpi_client.get_server_metadata())
+        logging.info("Server RTC handshake: %s", rtc_info)
+
     observation = env.reset().observation
     observation["state"] = observation["qpos"]
     warm_up(openpi_client, observation, args)
 
     worker = InferenceWorker(openpi_client)
-    action_smooth = ActionSmooth(
-        worker,
-        max_timesteps=args.num_steps,
-        query_frequency=args.query_frequency,
-    )
+
+    scheduler = None
+    if args.rtc:
+        # RTC live mode replaces ActionSmooth entirely (no time-integration on
+        # top of RTC, per the paper's temporal-ensembling baseline comparison).
+        scheduler = RTCScheduler(worker, s_min=args.s_min)
+    else:
+        action_smooth = ActionSmooth(
+            worker,
+            max_timesteps=args.num_steps,
+            query_frequency=args.query_frequency,
+        )
     worker.start()
 
     data_action = None
@@ -298,7 +313,10 @@ def main(args):
     observation = prepare_observation(observation, openpi_client, args.camera_names, args.prompt)
 
     # Synchronously wait for the first chunk so the motors are never driven by empty actions.
-    action_smooth.submit_query(observation)
+    if scheduler is not None:
+        scheduler.submit_query(observation)
+    else:
+        action_smooth.submit_query(observation)
     if not worker.wait_for_first_result(FIRST_CHUNK_TIMEOUT):
         worker.stop()
         raise RuntimeError(f"Timed out waiting for the first action chunk after {FIRST_CHUNK_TIMEOUT:.0f}s")
@@ -311,7 +329,13 @@ def main(args):
         observation = env.get_observation().observation
         observation["state"] = observation["qpos"]
         observation = prepare_observation(observation, openpi_client, args.camera_names, args.prompt)
-        action = action_smooth.get_action(observation)
+
+        if scheduler is not None:
+            # RTC live mode: the scheduler consumes worker results, decides
+            # when to request the next guided chunk and pops the next action.
+            action = scheduler.get_action(observation)
+        else:
+            action = action_smooth.get_action(observation)
 
         if recorded_actions is not None:
             recorded_actions.append(
@@ -390,6 +414,17 @@ if __name__ == "__main__":
         action="store_false",
         default=True,
         help="disable pinning the head joints to the HDF5 reference pose",
+    )
+    parser.add_argument(
+        "--rtc",
+        action="store_true",
+        help="enable Real-Time Chunking guidance (requires an RTC-capable server; default off)",
+    )
+    parser.add_argument(
+        "--s_min",
+        type=int,
+        default=15,
+        help="minimum execution horizon in control steps (RTC only; paper constraint d <= s <= H - d)",
     )
     parser.add_argument(
         "--camera_names",

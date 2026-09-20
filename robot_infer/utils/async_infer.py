@@ -21,9 +21,21 @@ class InferenceWorker(threading.Thread):
         self._pending_obs = None  # (query_t, obs) awaiting inference
         self._result = None  # latest unconsumed (query_t, actions)
         self._last_result_time = None  # monotonic time of the last successful infer
+        self._in_flight = False  # True while a submitted observation is being inferred
         self._consecutive_failures = 0
         self._infer_times = []
         self._max_infer_time = 0.0
+
+    @property
+    def in_flight(self) -> bool:
+        """True while a submitted observation is being inferred.
+
+        Set when a pending observation is picked up and cleared on both the
+        success and failure paths, so a scheduler gating submissions on this
+        flag can never deadlock on a failed inference.
+        """
+        with self._lock:
+            return self._in_flight
 
     def submit(self, observation, query_t: int) -> None:
         with self._lock:
@@ -73,6 +85,7 @@ class InferenceWorker(threading.Thread):
             with self._lock:
                 pending = self._pending_obs
                 self._pending_obs = None
+                self._in_flight = pending is not None
             if pending is None:
                 time.sleep(_IDLE_POLL_INTERVAL)
                 continue
@@ -84,6 +97,8 @@ class InferenceWorker(threading.Thread):
                 actions = response["actions"]
             except Exception as exc:
                 self._consecutive_failures += 1
+                with self._lock:
+                    self._in_flight = False
                 logging.error(
                     "Inference failed (%d consecutive failures): %s",
                     self._consecutive_failures,
@@ -96,6 +111,7 @@ class InferenceWorker(threading.Thread):
             with self._lock:
                 self._result = (query_t, actions)
                 self._last_result_time = time.monotonic()
+                self._in_flight = False
                 self._infer_times.append(elapsed)
                 self._max_infer_time = max(self._max_infer_time, elapsed)
 

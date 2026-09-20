@@ -8,6 +8,7 @@ import jax.numpy as jnp
 
 import openpi.models.model as _model
 import openpi.policies.policy as _policy
+import openpi.policies.rtc_policy as _rtc_policy
 import openpi.shared.download as download
 from openpi.training import checkpoints as _checkpoints
 from openpi.training import config as _config
@@ -35,6 +36,7 @@ def create_trained_policy(
     sample_kwargs: dict[str, Any] | None = None,
     default_prompt: str | None = None,
     norm_stats: dict[str, transforms.NormStats] | None = None,
+    rtc_config: _rtc_policy.RTCServerConfig | None = None,
 ) -> _policy.Policy:
     """Create a policy from a trained checkpoint.
 
@@ -48,6 +50,8 @@ def create_trained_policy(
             data if it doesn't already exist.
         norm_stats: The norm stats to use for the policy. If not provided, the norm stats will be loaded
             from the checkpoint directory.
+        rtc_config: If set, wrap the policy with Real-Time Chunking guidance (see
+            `openpi.policies.rtc_policy`). Default `None` keeps the plain policy.
     """
     repack_transforms = repack_transforms or transforms.Group()
     checkpoint_dir = download.maybe_download(str(checkpoint_dir))
@@ -63,21 +67,34 @@ def create_trained_policy(
             raise ValueError("Asset id is required to load norm stats.")
         norm_stats = _checkpoints.load_norm_stats(checkpoint_dir / "assets", data_config.asset_id)
 
+    input_transforms = [
+        *repack_transforms.inputs,
+        transforms.InjectDefaultPrompt(default_prompt),
+        *data_config.data_transforms.inputs,
+        transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+        *data_config.model_transforms.inputs,
+    ]
+    output_transforms = [
+        *data_config.model_transforms.outputs,
+        transforms.Unnormalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+        *data_config.data_transforms.outputs,
+        *repack_transforms.outputs,
+    ]
+
+    if rtc_config is not None:
+        return _rtc_policy.RTCPolicy(
+            model,
+            rtc_config=rtc_config,
+            transforms=input_transforms,
+            output_transforms=output_transforms,
+            sample_kwargs=sample_kwargs,
+            metadata=train_config.policy_metadata,
+        )
+
     return _policy.Policy(
         model,
-        transforms=[
-            *repack_transforms.inputs,
-            transforms.InjectDefaultPrompt(default_prompt),
-            *data_config.data_transforms.inputs,
-            transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
-            *data_config.model_transforms.inputs,
-        ],
-        output_transforms=[
-            *data_config.model_transforms.outputs,
-            transforms.Unnormalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
-            *data_config.data_transforms.outputs,
-            *repack_transforms.outputs,
-        ],
+        transforms=input_transforms,
+        output_transforms=output_transforms,
         sample_kwargs=sample_kwargs,
         metadata=train_config.policy_metadata,
     )

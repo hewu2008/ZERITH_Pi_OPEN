@@ -37,13 +37,23 @@ class Policy(BasePolicy):
         self._sample_kwargs = sample_kwargs or {}
         self._metadata = metadata or {}
 
-    @override
-    def infer(self, obs: dict) -> dict:  # type: ignore[misc]
+    def _prepare_inputs(self, obs: dict) -> dict:
+        """Run the input transforms and add a batch dimension."""
         # Make a copy since transformations may modify the inputs in place.
         inputs = jax.tree.map(lambda x: x, obs)
         inputs = self._input_transform(inputs)
         # Make a batch and convert to jax.Array.
-        inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
+        return jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
+
+    def _finalize_outputs(self, outputs: dict) -> dict:
+        """Remove the batch dimension and run the output transforms."""
+        # Unbatch and convert to np.ndarray.
+        outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
+        return self._output_transform(outputs)
+
+    @override
+    def infer(self, obs: dict) -> dict:  # type: ignore[misc]
+        inputs = self._prepare_inputs(obs)
 
         self._rng, sample_rng = jax.random.split(self._rng)
         outputs = {
@@ -51,9 +61,7 @@ class Policy(BasePolicy):
             "actions": self._sample_actions(sample_rng, _model.Observation.from_dict(inputs), **self._sample_kwargs),
         }
 
-        # Unbatch and convert to np.ndarray.
-        outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
-        return self._output_transform(outputs)
+        return self._finalize_outputs(outputs)
 
     @property
     def metadata(self) -> dict[str, Any]:
