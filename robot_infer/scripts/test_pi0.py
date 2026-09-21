@@ -417,8 +417,10 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--rtc",
+        dest="rtc",
         action="store_true",
-        help="enable Real-Time Chunking guidance (requires an RTC-capable server; default off)",
+        default=True,
+        help="use Real-Time Chunking guidance (enabled by default; requires an RTC-capable server)",
     )
     parser.add_argument(
         "--s_min",

@@ -53,9 +53,9 @@ class RTCServerConfig:
     # Guidance mode:
     # - "off":      plain sampling for every request (feature disabled).
     # - "identity": identity-Jacobian correction (`correction = err`), the
-    #               legacy torch behavior; zero backward cost. A/B baseline.
-    # - "full":     exact VJP correction per paper Eq. (pigdm1). Default.
-    mode: str = "full"
+    #               legacy torch behavior; zero backward cost. Default.
+    # - "full":     exact VJP correction per paper Eq. (pigdm1).
+    mode: str = "identity"
     # Maximum guidance weight (paper beta).
     beta: float = 10.0
     # Number of *first* denoising steps that use the exact VJP; the remaining

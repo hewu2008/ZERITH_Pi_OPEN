@@ -2,12 +2,13 @@
 # Start the remote policy inference websocket server.
 # Serves a trained pi0_zerith policy over websockets on the given port.
 #
-# RTC (Real-Time Chunking) guidance is disabled by default. To enable it,
-# append e.g.:
-#   --rtc.enabled --rtc.mode full --rtc.beta 10.0 --rtc.s_min 15
-# (mode: "full" = exact VJP per the paper, "identity" = A/B baseline,
-#  "off" = advertise but never guide; the server pre-compiles both the plain
-#  and guided samplers at startup so the first request cannot hit a JIT storm.)
+# RTC (Real-Time Chunking) guidance is enabled by default in identity mode. To
+# switch modes or tune it, append e.g.:
+#   --rtc.mode full --rtc.beta 10.0 --rtc.s_min 15
+# (mode: "identity" = default, "full" = exact VJP per the paper,
+#  "off" = advertise but never guide; disable the feature entirely with
+#  --rtc.no-enabled. The server pre-compiles both the plain and guided samplers
+#  at startup so the first request cannot hit a JIT storm.)
 
 export CUDA_VISIBLE_DEVICES=1
 export LEROBOT_HOME=/data/4T-2/dataset/

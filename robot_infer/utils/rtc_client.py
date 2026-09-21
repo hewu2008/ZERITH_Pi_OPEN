@@ -88,7 +88,8 @@ def validate_server_metadata(metadata: dict) -> dict:
     if not isinstance(rtc_info, dict):
         raise RuntimeError(
             "Server metadata has no 'rtc' handshake entry; refusing to enable RTC mode. "
-            "Start the server with --rtc.enabled."
+            "RTC is enabled by default on the server, so check that it was not started with "
+            "--rtc.no-enabled and that it runs a model with guided_sample_actions."
         )
     version = rtc_info.get("version")
     if version != RTC_PROTOCOL_VERSION:

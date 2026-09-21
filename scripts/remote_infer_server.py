@@ -56,19 +56,20 @@ class Checkpoint:
 class RTCArgs:
     """Real-Time Chunking (RTC) guidance settings (server side).
 
-    When enabled, the metadata handshake advertises RTC support and requests
-    carrying an `obs["rtc"]` payload (previous chunk leftover + delay/horizon
-    counters) are sampled with PiGDM guidance; see `openpi.policies.rtc_policy`
-    for the wire protocol. Disabled by default, and requests without the
-    `rtc` field always follow the plain path regardless of these settings.
+    Enabled by default: the metadata handshake advertises RTC support and
+    requests carrying an `obs["rtc"]` payload (previous chunk leftover +
+    delay/horizon counters) are sampled with PiGDM guidance; see
+    `openpi.policies.rtc_policy` for the wire protocol. Disable with
+    `--rtc.no-enabled`. Requests without the `rtc` field always follow the
+    plain path regardless of these settings.
     """
 
     # Master switch: advertise RTC and enable guided sampling.
-    enabled: bool = False
-    # Guidance mode: "full" (exact VJP correction, paper Eq. pigdm1),
-    # "identity" (legacy identity-Jacobian approximation, A/B baseline),
-    # or "off" (advertise but never guide).
-    mode: str = "full"
+    enabled: bool = True
+    # Guidance mode: "identity" (legacy identity-Jacobian approximation,
+    # default), "full" (exact VJP correction, paper Eq. pigdm1), or "off"
+    # (advertise but never guide).
+    mode: str = "identity"
     # Maximum guidance weight (paper beta).
     beta: float = 10.0
     # Number of first denoising steps using the exact VJP (None = all steps;
@@ -93,7 +94,7 @@ class Args:
     # Record the policy's behavior for debugging.
     record: bool = False
 
-    # Real-Time Chunking guidance (disabled by default).
+    # Real-Time Chunking guidance (enabled by default, identity mode).
     rtc: RTCArgs = dataclasses.field(default_factory=RTCArgs)
 
 
