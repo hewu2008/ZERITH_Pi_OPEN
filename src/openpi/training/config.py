@@ -14,7 +14,6 @@ from typing_extensions import override
 import tyro
 
 import openpi.models.model as _model
-import openpi.models.pi0 as pi0
 import openpi.models.pi0_config as pi0_config
 import openpi.models.pi0_fast as pi0_fast
 import openpi.models.tokenizer as _tokenizer
@@ -168,7 +167,7 @@ class DataConfigFactory(abc.ABC):
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         """Create a data config."""
 
-    def create_base_config(self, assets_dirs: pathlib.Path) -> DataConfig:
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         repo_id = self.repo_id if self.repo_id is not tyro.MISSING else None
         asset_id = self.assets.asset_id or repo_id
         return dataclasses.replace(
@@ -176,6 +175,7 @@ class DataConfigFactory(abc.ABC):
             repo_id=repo_id,
             asset_id=asset_id,
             norm_stats=self._load_norm_stats(epath.Path(self.assets.assets_dir or assets_dirs), asset_id),
+            use_quantile_norm=model_config.model_type != ModelType.PI0,
         )
 
     def _load_norm_stats(self, assets_dir: epath.Path, asset_id: str | None) -> dict[str, _transforms.NormStats] | None:
@@ -263,7 +263,7 @@ class LeRobotZerithJointDataConfig(DataConfigFactory):
         model_transforms = ModelTransformFactory(default_prompt='')(model_config)
 
         return dataclasses.replace(
-            self.create_base_config(assets_dirs),
+            self.create_base_config(assets_dirs, model_config),
             repack_transforms=repack_transform,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
@@ -282,7 +282,7 @@ class TrainConfig:
     # Defines the model config. Some attributes (action_dim, action_horizon, and max_token_len) are shared by all models
     # -- see BaseModelConfig. Specific model implementations (e.g., Pi0Config) inherit from BaseModelConfig and may
     # define additional attributes.
-    model: _model.BaseModelConfig = dataclasses.field(default_factory=pi0.Pi0Config)
+    model: _model.BaseModelConfig = dataclasses.field(default_factory=pi0_config.Pi0Config)
 
     # A weight loader can optionally load (possibly partial) weights from disk after the model is initialized.
     weight_loader: weight_loaders.WeightLoader = dataclasses.field(default_factory=weight_loaders.NoOpWeightLoader)
@@ -372,7 +372,7 @@ _CONFIGS = [
     TrainConfig(
         # This name is used by compute_norm_stats.py, train.py, and serve_policy.py.
         name="pi0_zerith",
-        model=pi0.Pi0Config(paligemma_variant="gemma_2b_lora", action_horizon=50, action_expert_variant="gemma_300m"),
+        model=pi0_config.Pi0Config(paligemma_variant="gemma_2b_lora", action_horizon=50, action_expert_variant="gemma_300m"),
         data=LeRobotZerithJointDataConfig(
             # LeRobot stores the converted dataset under <LEROBOT_HOME>/<repo_id>.
             # Keep this value aligned with train.sh REPO_ID and the dataset path used during conversion.
@@ -395,11 +395,47 @@ _CONFIGS = [
             decay_lr=1e-6,
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("/data/4T-1/hewu/model_zoo/pi0_base_params/params"),
-        freeze_filter=pi0.Pi0Config(
+        freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_horizon=50, action_expert_variant="gemma_300m"
         ).get_freeze_filter(),
         ema_decay=None,
         # Checkpoints are saved to <checkpoint_base_dir>/<config name>/<exp_name>/.
+        checkpoint_base_dir="./openpi_checkpoints",
+        batch_size=8,
+        log_interval=1,
+        save_interval=1000,
+        num_train_steps=30000,
+    ),
+    TrainConfig(
+        # Pi0.5 full fine-tuning on the same Zerith dataset. Compared to pi0_zerith:
+        # - pi05=True: state is discretized into language tokens (max_token_len becomes 200),
+        #   and the action expert uses adaRMSNorm to inject the flow matching timestep.
+        # - Quantile normalization is enabled automatically for non-pi0 model types
+        #   (see DataConfigFactory.create_base_config); the existing norm_stats.json files
+        #   already contain q01/q99.
+        # - Full fine-tuning (no LoRA), initialized from the pi05 base checkpoint.
+        name="pi05_zerith",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=50),
+        data=LeRobotZerithJointDataConfig(
+            # Keep this value aligned with the dataset path used during conversion.
+            repo_id="EmbodiedLab/clear_the_bin_box_20260910_v1",
+            assets=AssetsConfig(
+                assets_dir="./assets",
+                asset_id="EmbodiedLab/clear_the_bin_box_20260910_v1",
+            ),
+            base_config=DataConfig(
+                local_files_only=True,
+                prompt_from_task=True,
+            ),
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1000,
+            peak_lr=1e-5,
+            decay_steps=30000,
+            decay_lr=1e-6,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/4T-1/hewu/model_zoo/pi05_base_params/params"),
+        ema_decay=0.999,
         checkpoint_base_dir="./openpi_checkpoints",
         batch_size=8,
         log_interval=1,

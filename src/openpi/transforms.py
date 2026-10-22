@@ -297,15 +297,22 @@ class ZeroDims(DataTransformFn):
 @dataclasses.dataclass(frozen=True)
 class TokenizePrompt(DataTransformFn):
     tokenizer: _tokenizer.PaligemmaTokenizer
+    discrete_state_input: bool = False
 
     def __call__(self, data: DataDict) -> DataDict:
         if (prompt := data.pop("prompt", None)) is None:
             raise ValueError("Prompt is required")
 
+        if self.discrete_state_input:
+            if (state := data.get("state", None)) is None:
+                raise ValueError("State is required.")
+        else:
+            state = None
+
         if not isinstance(prompt, str):
             prompt = prompt.item()
 
-        tokens, token_masks = self.tokenizer.tokenize(prompt)
+        tokens, token_masks = self.tokenizer.tokenize(prompt, state)
         return {**data, "tokenized_prompt": tokens, "tokenized_prompt_mask": token_masks}
 
 
@@ -365,6 +372,19 @@ class PromptFromLeRobotTask(DataTransformFn):
             raise ValueError(f"{task_index=} not found in task mapping: {self.tasks}")
 
         return {**data, "prompt": prompt}
+
+
+@dataclasses.dataclass(frozen=True)
+class PadStatesAndActions(DataTransformFn):
+    """Zero-pads states and actions to the model action dimension."""
+
+    model_action_dim: int
+
+    def __call__(self, data: DataDict) -> DataDict:
+        data["state"] = pad_to_dim(data["state"], self.model_action_dim, axis=-1)
+        if "actions" in data:
+            data["actions"] = pad_to_dim(data["actions"], self.model_action_dim, axis=-1)
+        return data
 
 
 def flatten_dict(tree: at.PyTree) -> dict:
