@@ -245,18 +245,21 @@ class LeRobotZerithJointDataConfig(DataConfigFactory):
         )
 
         delta_action_mask = _transforms.make_bool_mask(7, -1, 7, -1, 5, -2)
-        # The last two dims (21, 22) are the chassis/base. The chassis is not
-        # controlled in this setup, so zero them out in both the training targets
-        # and the inference outputs to learn a constant "no command" (0) signal.
-        chassis_dims = (21, 22)
+        # Dims that are not controlled in this setup are zeroed out in both the training
+        # targets and the inference outputs so the model learns a constant "no command" (0):
+        # - 20: head pitch (head/position[1]). It only moves during the initial adjustment
+        #   at the start of each episode; masked out for now (TODO: revisit if the head
+        #   should be commanded).
+        # - 21, 22: chassis/base velocity.
+        zeroed_dims = (20, 21, 22)
         data_transforms = data_transforms.push(
             inputs=[
                 _transforms.DeltaActions(delta_action_mask),
-                _transforms.ZeroDims(chassis_dims),
+                _transforms.ZeroDims(zeroed_dims),
             ],
             outputs=[
                 _transforms.AbsoluteActions(delta_action_mask),
-                _transforms.ZeroDims(chassis_dims),
+                _transforms.ZeroDims(zeroed_dims),
             ],
         )
 
