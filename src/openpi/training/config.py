@@ -407,21 +407,31 @@ _CONFIGS = [
         num_train_steps=30000,
     ),
     TrainConfig(
-        # Pi0.5 full fine-tuning on the same Zerith dataset. Compared to pi0_zerith:
-        # - pi05=True: state is discretized into language tokens (max_token_len becomes 200),
-        #   and the action expert uses adaRMSNorm to inject the flow matching timestep.
-        # - Quantile normalization is enabled automatically for non-pi0 model types
+        # Pi0.5 fine-tuning on the Zerith dataset. Differences from pi0_zerith:
+        # - pi05=True: the state is discretized into language tokens (discrete_state_input=True,
+        #   max_token_len becomes 200) instead of being fed as a continuous suffix input, and the
+        #   action expert injects the flow matching timestep via adaRMSNorm (see Pi0Config).
+        # - Quantile normalization (q01/q99) is enabled automatically for non-PI0 model types
         #   (see DataConfigFactory.create_base_config); the existing norm_stats.json files
         #   already contain q01/q99.
-        # - Full fine-tuning (no LoRA), initialized from the pi05 base checkpoint.
+        # - LoRA fine-tuning of PaliGemma: the freeze filter freezes the base LLM weights
+        #   (.*llm.*, excluding the action expert .*llm.*_1.*) and trains the LoRA adapters;
+        #   the action expert is fully trained. The pi05 base checkpoint has no LoRA weights;
+        #   CheckpointWeightLoader backfills them from the initialized model
+        #   (missing_regex=".*lora.*").
+        # - EMA is enabled (ema_decay=0.999).
         name="pi05_zerith",
-        model=pi0_config.Pi0Config(pi05=True, action_horizon=50),
+        # discrete_state_input=True is redundant with pi05=True (Pi0Config.__post_init__ derives
+        # it automatically), but is kept explicit for clarity.
+        model=pi0_config.Pi0Config(pi05=True, discrete_state_input=True, paligemma_variant="gemma_2b_lora", action_horizon=50, action_expert_variant="gemma_300m"),
         data=LeRobotZerithJointDataConfig(
+            # LeRobot stores the converted dataset under <LEROBOT_HOME>/<repo_id>.
             # Keep this value aligned with the dataset path used during conversion.
-            repo_id="EmbodiedLab/clear_the_bin_box_20260910_v1",
+            repo_id="EmbodiedLab/clear_the_bin_box_20261010_v1",
             assets=AssetsConfig(
+                # Normalization stats are loaded from <assets_dir>/<asset_id>/norm_stats.json.
                 assets_dir="./assets",
-                asset_id="EmbodiedLab/clear_the_bin_box_20260910_v1",
+                asset_id="EmbodiedLab/clear_the_bin_box_20261010_v1",
             ),
             base_config=DataConfig(
                 local_files_only=True,
@@ -435,7 +445,13 @@ _CONFIGS = [
             decay_lr=1e-6,
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("/data/4T-1/hewu/model_zoo/pi05_base_params/params"),
+        # Freeze the PaliGemma base LLM weights; train LoRA adapters + the action expert.
+        # get_freeze_filter only depends on the two variants, so pi05 is irrelevant here.
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_horizon=50, action_expert_variant="gemma_300m"
+        ).get_freeze_filter(),
         ema_decay=0.999,
+        # Checkpoints are saved to <checkpoint_base_dir>/<config name>/<exp_name>/.
         checkpoint_base_dir="./openpi_checkpoints",
         batch_size=8,
         log_interval=1,
