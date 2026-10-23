@@ -246,17 +246,27 @@ class LeRobotZerithJointDataConfig(DataConfigFactory):
 
         # Action layout (23 dims): left arm 0-6, left gripper 7, right arm 8-14, right gripper 15,
         # waist 16-18, head yaw/pitch 19-20, base velocity 21-22.
+        # Dataset check (clear_the_bin_box_20261010_v1): action[t] == state[t+1], and for the
+        # arm/waist dims the delta targets are only 0.18-0.60x as spread out as the absolute ones,
+        # so delta is the better-conditioned representation there. The grippers are bimodal
+        # (q01/q99 ~ 0.01/0.90, with single-frame jumps up to ~0.6), hence they stay absolute.
         delta_action_mask = _transforms.make_bool_mask(7, -1, 7, -1, 5, -2)
 
         # Dims the policy does not need to command. They end up with different semantics because
         # ZeroDims is applied in a different space for each group (see the ordering note below):
-        # - 20: head pitch (head/position[1]). It stays constant during the task and only moves
-        #   during the initial adjustment at the start of each episode, so there is no useful
-        #   command to learn (TODO: revisit if the head should be commanded). Dim 20 is still in
+        # - 20: head pitch (head/position[1]). It stays at ~0.51 rad for the whole episode in 32/37
+        #   recordings; the other 5 contain one adjustment step (at the start, except one at ~46%
+        #   of the episode), so there is no repeatable command to learn. Dim 20 is still in
         #   delta_action_mask, so zeroing it means "hold the measured pitch": the training target
         #   is a zero delta and the inference output is the current head pitch.
-        # - 21, 22: chassis/base velocity. They are outside delta_action_mask, so zeroing them
-        #   means "no motion": zero in the targets and absolute 0 in the outputs.
+        # - 21, 22: chassis/base velocity. In the dataset they are white noise (std ~0.02, lag-1
+        #   autocorrelation ~0, 14-18% of frames above 0.01) and the base is not actuated at
+        #   deployment, so zeroing them means "no motion": zero in the targets and absolute 0 in
+        #   the outputs.
+        # TODO: dim 19 (head yaw) moves smoothly by up to ~1.2 rad inside an episode, but
+        # robot_infer pins the whole head pose, so the predicted yaw is discarded and the training
+        # state distribution does not match deployment. Either pin yaw in the data as well (and
+        # zero dim 19) or keep the head under policy control.
         zeroed_dims = (20, 21, 22)
 
         # Group.push() appends inputs but *prepends* outputs, so the actual execution order is:
