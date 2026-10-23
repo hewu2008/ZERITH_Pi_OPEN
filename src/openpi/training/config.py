@@ -244,22 +244,35 @@ class LeRobotZerithJointDataConfig(DataConfigFactory):
             outputs=[zerith_joint_policy.MobilearxOutputs()],
         )
 
+        # Action layout (23 dims): left arm 0-6, left gripper 7, right arm 8-14, right gripper 15,
+        # waist 16-18, head yaw/pitch 19-20, base velocity 21-22.
         delta_action_mask = _transforms.make_bool_mask(7, -1, 7, -1, 5, -2)
-        # Dims that are not controlled in this setup are zeroed out in both the training
-        # targets and the inference outputs so the model learns a constant "no command" (0):
-        # - 20: head pitch (head/position[1]). It only moves during the initial adjustment
-        #   at the start of each episode; masked out for now (TODO: revisit if the head
-        #   should be commanded).
-        # - 21, 22: chassis/base velocity.
+
+        # Dims the policy does not need to command. They end up with different semantics because
+        # ZeroDims is applied in a different space for each group (see the ordering note below):
+        # - 20: head pitch (head/position[1]). It stays constant during the task and only moves
+        #   during the initial adjustment at the start of each episode, so there is no useful
+        #   command to learn (TODO: revisit if the head should be commanded). Dim 20 is still in
+        #   delta_action_mask, so zeroing it means "hold the measured pitch": the training target
+        #   is a zero delta and the inference output is the current head pitch.
+        # - 21, 22: chassis/base velocity. They are outside delta_action_mask, so zeroing them
+        #   means "no motion": zero in the targets and absolute 0 in the outputs.
         zeroed_dims = (20, 21, 22)
+
+        # Group.push() appends inputs but *prepends* outputs, so the actual execution order is:
+        #   inputs:  MobilearxInputs -> DeltaActions -> ZeroDims
+        #   outputs: ZeroDims -> AbsoluteActions -> MobilearxOutputs
+        # ZeroDims must stay before AbsoluteActions (i.e. in delta space). Swapping them would zero
+        # dim 20 in absolute space, commanding 0 instead of the dataset's ~0.51 rad head pitch and
+        # producing a ~0.51 constant error on that dim in open-loop eval.
         data_transforms = data_transforms.push(
             inputs=[
                 _transforms.DeltaActions(delta_action_mask),
                 _transforms.ZeroDims(zeroed_dims),
             ],
             outputs=[
-                _transforms.AbsoluteActions(delta_action_mask),
                 _transforms.ZeroDims(zeroed_dims),
+                _transforms.AbsoluteActions(delta_action_mask),
             ],
         )
 
