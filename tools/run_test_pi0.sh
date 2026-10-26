@@ -17,5 +17,5 @@ sudo /home/robot/miniconda3/envs/lingbot-va/bin/python robot_infer/scripts/test_
   --port 55555 \
   --no_pin_head \
   --num_steps 864000 \
-  --prompt "Pick and place the door handle into the left bin and the L-shaped bent pipe into the right bin" \
+  --prompt "Use the left arm to pick and place the door handle into the left bin. Use the right arm to pick and place the L-shaped bent pipe into the right bin. Put all other objects into the front bin." \
   --init_hdf5 /home/robot/hewu/dataset/002e81207a19441bae7f4653ad759d7c/episode.hdf5 \
