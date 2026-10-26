@@ -12,5 +12,5 @@ export HF_DATASETS_OFFLINE=1
 mkdir -p logs
 
 python scripts/compute_norm_stats.py \
-  --config_name pi0_zerith \
+  --config_name pi05_zerith \
   2>&1 | tee -a logs/compute_norm_stats.log
