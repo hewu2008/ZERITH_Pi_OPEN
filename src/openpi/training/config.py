@@ -254,27 +254,24 @@ class LeRobotZerithJointDataConfig(DataConfigFactory):
 
         # Dims the policy does not need to command. They end up with different semantics because
         # ZeroDims is applied in a different space for each group (see the ordering note below):
-        # - 20: head pitch (head/position[1]). It stays at ~0.51 rad for the whole episode in 32/37
-        #   recordings; the other 5 contain one adjustment step (at the start, except one at ~46%
-        #   of the episode), so there is no repeatable command to learn. Dim 20 is still in
-        #   delta_action_mask, so zeroing it means "hold the measured pitch": the training target
-        #   is a zero delta and the inference output is the current head pitch.
         # - 21, 22: chassis/base velocity. In the dataset they are white noise (std ~0.02, lag-1
         #   autocorrelation ~0, 14-18% of frames above 0.01) and the base is not actuated at
         #   deployment, so zeroing them means "no motion": zero in the targets and absolute 0 in
         #   the outputs.
-        # TODO: dim 19 (head yaw) moves smoothly by up to ~1.2 rad inside an episode, but
-        # robot_infer pins the whole head pose, so the predicted yaw is discarded and the training
-        # state distribution does not match deployment. Either pin yaw in the data as well (and
-        # zero dim 19) or keep the head under policy control.
-        zeroed_dims = (20, 21, 22)
+        # Note: dim 20 (head pitch) was zeroed for clear_the_bin_box_20261010 (constant ~0.51 rad
+        # in 36/37 episodes), but in clear_the_bin_box_20261026 the pitch moves within 54/55
+        # episodes (median per-episode range ~0.4 rad) and the pi05 deployment path
+        # (real_env_sdk._set_head_joint) actually commands the head motors, so it stays under
+        # policy control via delta actions.
+        zeroed_dims = (21, 22)
 
         # Group.push() appends inputs but *prepends* outputs, so the actual execution order is:
         #   inputs:  MobilearxInputs -> DeltaActions -> ZeroDims
         #   outputs: ZeroDims -> AbsoluteActions -> MobilearxOutputs
-        # ZeroDims must stay before AbsoluteActions (i.e. in delta space). Swapping them would zero
-        # dim 20 in absolute space, commanding 0 instead of the dataset's ~0.51 rad head pitch and
-        # producing a ~0.51 constant error on that dim in open-loop eval.
+        # ZeroDims must stay before AbsoluteActions (i.e. in delta space, where zeroed dims are
+        # the delta targets). Dims 21/22 are not in delta_action_mask, so for them the two
+        # placements are equivalent, but keep the ordering consistent for any delta dim that
+        # gets zeroed in the future.
         data_transforms = data_transforms.push(
             inputs=[
                 _transforms.DeltaActions(delta_action_mask),
