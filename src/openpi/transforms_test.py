@@ -1,3 +1,6 @@
+import pathlib
+import tempfile
+
 import numpy as np
 import pytest
 
@@ -119,3 +122,76 @@ def test_extract_prompt_from_task():
 
     with pytest.raises(ValueError, match="task_index=2 not found in task mapping"):
         transform({"task_index": 2})
+
+
+def test_load_subtasks():
+    root = pathlib.Path(tempfile.mkdtemp())
+    assert _transforms.load_subtasks(root) == {}
+
+    (root / "meta").mkdir(parents=True, exist_ok=True)
+    (root / "meta" / "subtasks.jsonl").write_text(
+        '{"subtask_index": 0, "subtask": "grab the handle"}\n{"subtask_index": 1, "subtask": "place it"}\n'
+    )
+    assert _transforms.load_subtasks(root) == {0: "grab the handle", 1: "place it"}
+
+
+def test_extract_subtask_from_index():
+    transform = _transforms.SubtaskFromIndex({0: "grab the handle"})
+
+    assert transform({"subtask_index": np.int64(0)})["subtask"] == "grab the handle"
+    # Unannotated frames (and datasets without the column) map to an empty subtask; the key is always set so the
+    # tokenizer can tell a training batch (key present) from a serving request (key absent).
+    assert transform({"subtask_index": np.int64(-1)})["subtask"] == ""
+    assert transform({})["subtask"] == ""
+
+
+def test_tokenize_pi05_subtask_training():
+    tokenizer = _tokenizer.PaligemmaTokenizer(max_len=64)
+    transform = _transforms.TokenizePi05SubtaskInputs(
+        tokenizer, discrete_state_input=True, max_subtask_len=8
+    )
+    item = {
+        "state": np.zeros(5, dtype=np.float32),
+        "actions": np.zeros((2, 5), dtype=np.float32),
+        "prompt": "pick the box",
+        "subtask": "grab the handle",
+    }
+    out = transform(dict(item))
+
+    assert out["tokenized_prompt"].shape == (64,)
+    assert out["token_ar_mask"].shape == (64,)
+    assert out["token_loss_mask"].any()
+    assert "prompt" not in out and "subtask" not in out
+
+
+def test_tokenize_pi05_subtask_training_without_label():
+    tokenizer = _tokenizer.PaligemmaTokenizer(max_len=64)
+    transform = _transforms.TokenizePi05SubtaskInputs(
+        tokenizer, discrete_state_input=True, max_subtask_len=8
+    )
+    item = {
+        "state": np.zeros(5, dtype=np.float32),
+        "actions": np.zeros((2, 5), dtype=np.float32),
+        "prompt": "pick the box",
+        "subtask": "",
+    }
+    out = transform(dict(item))
+
+    # No annotation: plain pi0.5 prompt, so the subtask cross-entropy contributes nothing.
+    assert "token_loss_mask" not in out
+    assert out["tokenized_prompt_mask"].sum() > 0
+
+
+def test_tokenize_pi05_subtask_inference():
+    tokenizer = _tokenizer.PaligemmaTokenizer(max_len=64)
+    transform = _transforms.TokenizePi05SubtaskInputs(
+        tokenizer, discrete_state_input=True, max_subtask_len=8
+    )
+    out = transform({"state": np.zeros(5, dtype=np.float32), "prompt": "pick the box"})
+
+    token_mask = out["tokenized_prompt_mask"]
+    start = int(np.argmax(~token_mask))
+    assert start > 0
+    assert not token_mask[start : start + 8].any()
+    assert token_mask[start + 8 :].any()
+    assert out["token_ar_mask"][start] == 1

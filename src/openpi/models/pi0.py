@@ -1,3 +1,4 @@
+import dataclasses
 import logging
 
 import einops
@@ -5,11 +6,13 @@ import flax.nnx as nnx
 import flax.nnx.bridge as nnx_bridge
 import jax
 import jax.numpy as jnp
+import optax
 from typing_extensions import override
 
 from openpi.models import model as _model
 from openpi.models import pi0_config
 from openpi.models import rtc as _rtc
+from openpi.models import tokenizer as _tokenizer
 import openpi.models.gemma as _gemma
 import openpi.models.siglip as _siglip
 from openpi.shared import array_typing as at
@@ -68,6 +71,11 @@ class Pi0(_model.BaseModel):
     def __init__(self, config: pi0_config.Pi0Config, rngs: nnx.Rngs):
         super().__init__(config.action_dim, config.action_horizon, config.max_token_len)
         self.pi05 = config.pi05
+        self.train_subtask_prediction = config.train_subtask_prediction
+        self.sample_subtask_prediction = config.sample_subtask_prediction
+        self.subtask_loss_weight = config.subtask_loss_weight
+        self.max_subtask_len = config.max_subtask_len
+        self.subtask_temperature = config.subtask_temperature
         paligemma_config = _gemma.get_config(config.paligemma_variant)
         action_expert_config = _gemma.get_config(config.action_expert_variant)
         # TODO: rewrite gemma in NNX. For now, use bridge.
@@ -103,7 +111,7 @@ class Pi0(_model.BaseModel):
     @at.typecheck
     def embed_prefix(
         self, obs: _model.Observation
-    ) -> tuple[at.Float[at.Array, "b s emb"], at.Bool[at.Array, "b s"], at.Bool[at.Array, " s"]]:
+    ) -> tuple[at.Float[at.Array, "b s emb"], at.Bool[at.Array, "b s"], at.Bool[at.Array, "b s"]]:
         input_mask = []
         ar_mask = []
         tokens = []
@@ -120,18 +128,24 @@ class Pi0(_model.BaseModel):
                 )
             )
             # image tokens attend to each other
-            ar_mask += [False] * image_tokens.shape[1]
+            ar_mask.append(jnp.zeros(image_tokens.shape[:2], dtype=jnp.bool_))
 
         # add language (aka tokenized inputs)
         if obs.tokenized_prompt is not None:
+            assert obs.tokenized_prompt_mask is not None, "Tokenized prompt mask is required"
             tokenized_inputs = self.PaliGemma.llm(obs.tokenized_prompt, method="embed")
             tokens.append(tokenized_inputs)
             input_mask.append(obs.tokenized_prompt_mask)
-            # full attention between image and language inputs
-            ar_mask += [False] * tokenized_inputs.shape[1]
+            if obs.token_ar_mask is None:
+                # full attention between image and language inputs
+                token_ar_mask = jnp.zeros_like(obs.tokenized_prompt_mask)
+            else:
+                # pi0-fast / pi0.5 subtask prediction: the answer tokens attend causally
+                token_ar_mask = obs.token_ar_mask.astype(jnp.bool_)
+            ar_mask.append(token_ar_mask)
         tokens = jnp.concatenate(tokens, axis=1)
         input_mask = jnp.concatenate(input_mask, axis=1)
-        ar_mask = jnp.array(ar_mask)
+        ar_mask = jnp.concatenate(ar_mask, axis=1)
         return tokens, input_mask, ar_mask
 
     @at.typecheck
@@ -140,19 +154,20 @@ class Pi0(_model.BaseModel):
     ) -> tuple[
         at.Float[at.Array, "b s emb"],
         at.Bool[at.Array, "b s"],
-        at.Bool[at.Array, " s"],
+        at.Bool[at.Array, "b s"],
         at.Float[at.Array, "b emb"] | None,
     ]:
         input_mask = []
         ar_mask = []
         tokens = []
+        batch_size = obs.state.shape[0]
         if not self.pi05:
             # add a single state token
             state_token = self.state_proj(obs.state)[:, None, :]
             tokens.append(state_token)
-            input_mask.append(jnp.ones((obs.state.shape[0], 1), dtype=jnp.bool_))
+            input_mask.append(jnp.ones((batch_size, 1), dtype=jnp.bool_))
             # image/language inputs do not attend to state or actions
-            ar_mask += [True]
+            ar_mask.append(jnp.ones((batch_size, 1), dtype=jnp.bool_))
 
         action_tokens = self.action_in_proj(noisy_actions)
         # embed timestep using sine-cosine positional encoding with sensitivity in the range [0, 1]
@@ -177,10 +192,14 @@ class Pi0(_model.BaseModel):
         tokens.append(action_expert_tokens)
         input_mask.append(jnp.ones(action_expert_tokens.shape[:2], dtype=jnp.bool_))
         # image/language/state inputs do not attend to action tokens
-        ar_mask += [True] + ([False] * (self.action_horizon - 1))
+        ar_mask.append(
+            jnp.broadcast_to(
+                jnp.asarray([True] + ([False] * (self.action_horizon - 1))), action_expert_tokens.shape[:2]
+            )
+        )
         tokens = jnp.concatenate(tokens, axis=1)
         input_mask = jnp.concatenate(input_mask, axis=1)
-        ar_mask = jnp.array(ar_mask)
+        ar_mask = jnp.concatenate(ar_mask, axis=1)
         return tokens, input_mask, ar_mask, adarms_cond
 
     @override
@@ -201,7 +220,7 @@ class Pi0(_model.BaseModel):
         prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
         suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(observation, x_t, time)
         input_mask = jnp.concatenate([prefix_mask, suffix_mask], axis=1)
-        ar_mask = jnp.concatenate([prefix_ar_mask, suffix_ar_mask], axis=0)
+        ar_mask = jnp.concatenate([prefix_ar_mask, suffix_ar_mask], axis=1)
         attn_mask = make_attn_mask(input_mask, ar_mask)
         positions = jnp.cumsum(input_mask, axis=1) - 1
         (prefix_out, suffix_out), _ = self.PaliGemma.llm(
@@ -209,7 +228,29 @@ class Pi0(_model.BaseModel):
         )
         v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
 
-        return jnp.mean(jnp.square(v_t - u_t), axis=-1)
+        action_loss = jnp.mean(jnp.square(v_t - u_t), axis=-1)
+        if not self.train_subtask_prediction:
+            return action_loss
+        # Paper Eq. 1: the flow-matching term plus a weighted cross-entropy on the subtask tokens.
+        return action_loss + self.subtask_loss_weight * self.subtask_lm_loss(prefix_out, observation)[:, None]
+
+    @at.typecheck
+    def subtask_lm_loss(
+        self, prefix_out: at.Float[at.Array, "b s emb"], observation: _model.Observation
+    ) -> at.Float[at.Array, " b"]:
+        """Cross-entropy of the subtask tokens, read out of the VLM prefix hidden states (paper Eq. 1, text term)."""
+        assert observation.tokenized_prompt is not None, "Tokenized prompt is required for subtask prediction"
+        assert observation.token_loss_mask is not None, "Token loss mask is required for subtask prediction"
+
+        text_len = observation.tokenized_prompt.shape[1]
+        # `prefix_out` is the image tokens followed by the prompt tokens; shifting by one aligns every hidden state
+        # with its next token, so the trailing `Subtask: ` token predicts the first subtask token.
+        logits = self.PaliGemma.llm(prefix_out[:, -text_len:-1], method="deembed")
+        targets = observation.tokenized_prompt[:, 1:]
+        weights = observation.token_loss_mask[:, 1:].astype(jnp.float32)
+        ce = optax.softmax_cross_entropy_with_integer_labels(logits.astype(jnp.float32), targets)
+        # Frames without an annotation carry an all-False mask, hence a zero (and gradient-free) loss.
+        return jnp.sum(ce * weights, axis=-1) / jnp.clip(jnp.sum(weights, axis=-1), 1.0)
 
     @at.typecheck
     def suffix_velocity(
@@ -291,6 +332,75 @@ class Pi0(_model.BaseModel):
 
         x_0, _ = jax.lax.while_loop(cond, step, (noise, 1.0))
         return x_0
+
+    @at.typecheck
+    def sample_subtask(
+        self, rng: at.KeyArrayLike, observation: _model.Observation, *, temperature: float = 0.0
+    ) -> tuple[_model.Observation, at.Int[at.Array, "b l"], at.Bool[at.Array, "b l"]]:
+        """High-level stage of pi0.5 inference: generate the subtask autoregressively.
+
+        `transforms.TokenizePi05SubtaskInputs` reserves `max_subtask_len` masked slots right after the
+        `Subtask: ` prefix, so each sampled token is written in place and the `\\nAction: ` cue already sits behind
+        the reserved block. The returned observation carries the generated subtask inside its prompt and can be fed
+        straight to `sample_actions` (the low-level stage); the last two outputs are the generated ids and their
+        validity mask, ready for detokenization.
+        """
+        if not self.pi05:
+            raise ValueError("Subtask prediction is only supported for pi0.5 models.")
+
+        observation = _model.preprocess_observation(None, observation, train=False)
+        assert observation.tokenized_prompt is not None, "Tokenized prompt is required for subtask prediction"
+        assert observation.tokenized_prompt_mask is not None, "Tokenized prompt mask is required for subtask prediction"
+        tokens = observation.tokenized_prompt
+        token_mask = observation.tokenized_prompt_mask
+        batch_size = tokens.shape[0]
+        rows = jnp.arange(batch_size)
+        # First reserved slot, i.e. where the generated subtask starts (the prompt is prefix + slots + cue).
+        start = jnp.argmax(~token_mask, axis=-1)
+
+        def cond(carry):
+            index, _, _, done = carry
+            return (index < self.max_subtask_len) & ~jnp.all(done)
+
+        def step(carry):
+            index, tokens, token_mask, done = carry
+            step_observation = dataclasses.replace(
+                observation, tokenized_prompt=tokens, tokenized_prompt_mask=token_mask
+            )
+            prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(step_observation)
+            prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
+            positions = jnp.cumsum(prefix_mask, axis=1) - 1
+            (prefix_out, _), _ = self.PaliGemma.llm(
+                [prefix_tokens, None], mask=prefix_attn_mask, positions=positions
+            )
+            # The previous slot holds the hidden state that predicts this subtask token (first step: the last
+            # prefix token, which is the trailing space of `Subtask: `).
+            hidden = prefix_out[rows, jnp.clip(start + index - 1, 0, tokens.shape[1] - 1)][:, None, :]
+            logits = self.PaliGemma.llm(hidden, method="deembed")[:, 0]
+            if temperature > 0.0:
+                next_token = jax.random.categorical(rng, logits / temperature, axis=-1)
+            else:
+                next_token = jnp.argmax(logits, axis=-1)
+            next_token = jnp.where(done, 0, next_token).astype(jnp.int32)
+            slot = start + index
+            tokens = tokens.at[rows, slot].set(jnp.where(done, tokens[rows, slot], next_token))
+            token_mask = token_mask.at[rows, slot].set(~done)
+            return index + 1, tokens, token_mask, done | (next_token == _tokenizer.PALIGEMMA_EOS_TOKEN)
+
+        _, tokens, token_mask, _ = jax.lax.while_loop(
+            cond, step, (jnp.asarray(0), tokens, token_mask, jnp.zeros((batch_size,), dtype=jnp.bool_))
+        )
+        # Compact the reserved slots back into a (b, max_subtask_len) block; unwritten slots stay masked.
+        slots = jnp.clip(start[:, None] + jnp.arange(self.max_subtask_len)[None, :], 0, tokens.shape[1] - 1)
+        subtask_tokens = jnp.take_along_axis(tokens, slots, axis=1)
+        subtask_mask = jnp.take_along_axis(token_mask, slots, axis=1)
+        observation = dataclasses.replace(
+            observation,
+            tokenized_prompt=tokens,
+            tokenized_prompt_mask=token_mask,
+            token_loss_mask=None,
+        )
+        return observation, subtask_tokens, subtask_mask
 
     @at.typecheck
     def guided_sample_actions(
