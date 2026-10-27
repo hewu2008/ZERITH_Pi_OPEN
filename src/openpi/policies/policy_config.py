@@ -6,6 +6,7 @@ from typing import Any
 
 import jax.numpy as jnp
 
+from openpi.models import tokenizer as _tokenizer
 import openpi.models.model as _model
 import openpi.policies.policy as _policy
 import openpi.policies.rtc_policy as _rtc_policy
@@ -81,6 +82,13 @@ def create_trained_policy(
         *repack_transforms.outputs,
     ]
 
+    # pi0.5 staged inference needs the tokenizer to turn the generated subtask ids back into text.
+    subtask_tokenizer = (
+        _tokenizer.PaligemmaTokenizer(train_config.model.max_token_len)
+        if getattr(model, "sample_subtask_prediction", False)
+        else None
+    )
+
     if rtc_config is not None:
         return _rtc_policy.RTCPolicy(
             model,
@@ -89,6 +97,7 @@ def create_trained_policy(
             output_transforms=output_transforms,
             sample_kwargs=sample_kwargs,
             metadata=train_config.policy_metadata,
+            subtask_tokenizer=subtask_tokenizer,
         )
 
     return _policy.Policy(
@@ -97,4 +106,5 @@ def create_trained_policy(
         output_transforms=output_transforms,
         sample_kwargs=sample_kwargs,
         metadata=train_config.policy_metadata,
+        subtask_tokenizer=subtask_tokenizer,
     )

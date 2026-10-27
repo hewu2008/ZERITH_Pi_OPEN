@@ -31,6 +31,16 @@ class Pi0Config(_model.BaseModelConfig):
     pi05: bool = False
     # This config option is not used directly by the model, but it is read by the ModelTransformFactory.
     discrete_state_input: bool = None  # type: ignore
+    # pi0.5 high-level subtask prediction (paper Sec. IV-A): the VLM first predicts a subtask as text and the
+    # action expert is then conditioned on it. Both switches default to off, so plain pi0/pi0.5 behavior is kept.
+    train_subtask_prediction: bool = False
+    sample_subtask_prediction: bool = False
+    # Weight (alpha in paper Eq. 1) of the subtask cross-entropy added to the flow-matching action loss.
+    subtask_loss_weight: float = 1.0
+    # Number of slots reserved for the generated subtask (also caps the supervised subtask length).
+    max_subtask_len: int = 20
+    # 0.0 selects the argmax token (greedy), > 0.0 samples with `logits / temperature`.
+    subtask_temperature: float = 0.0
 
     def __post_init__(self):
         if self.max_token_len is None:

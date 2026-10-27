@@ -13,6 +13,7 @@ from typing_extensions import override
 
 from openpi import transforms as _transforms
 from openpi.models import model as _model
+from openpi.models import tokenizer as _tokenizer
 from openpi.shared import array_typing as at
 from openpi.shared import nnx_utils
 
@@ -29,8 +30,20 @@ class Policy(BasePolicy):
         output_transforms: Sequence[_transforms.DataTransformFn] = (),
         sample_kwargs: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
+        subtask_tokenizer: _tokenizer.PaligemmaTokenizer | None = None,
     ):
         self._sample_actions = nnx_utils.module_jit(model.sample_actions)
+        # pi0.5 two-stage inference: sample the subtask first, then condition the actions on it.
+        self._sample_subtask = (
+            nnx_utils.module_jit(model.sample_subtask, static_argnames=("temperature",))
+            if getattr(model, "sample_subtask_prediction", False)
+            else None
+        )
+        if self._sample_subtask is not None:
+            if subtask_tokenizer is None:
+                raise ValueError("`subtask_tokenizer` is required when the model samples subtasks.")
+            self._subtask_tokenizer = subtask_tokenizer
+            self._subtask_temperature = model.subtask_temperature
         self._input_transform = _transforms.compose(transforms)
         self._output_transform = _transforms.compose(output_transforms)
         self._rng = rng or jax.random.key(0)
@@ -54,14 +67,31 @@ class Policy(BasePolicy):
     @override
     def infer(self, obs: dict) -> dict:  # type: ignore[misc]
         inputs = self._prepare_inputs(obs)
+        observation = _model.Observation.from_dict(inputs)
 
-        self._rng, sample_rng = jax.random.split(self._rng)
+        subtask_text = None
+        if self._sample_subtask is None:
+            self._rng, sample_rng = jax.random.split(self._rng)
+        else:
+            self._rng, subtask_rng, sample_rng = jax.random.split(self._rng, 3)
+            observation, subtask_tokens, subtask_mask = self._sample_subtask(
+                subtask_rng, observation, temperature=self._subtask_temperature
+            )
+            subtask_text = self._decode_subtask(subtask_tokens, subtask_mask)
+
         outputs = {
             "state": inputs["state"],
-            "actions": self._sample_actions(sample_rng, _model.Observation.from_dict(inputs), **self._sample_kwargs),
+            "actions": self._sample_actions(sample_rng, observation, **self._sample_kwargs),
         }
 
-        return self._finalize_outputs(outputs)
+        result = self._finalize_outputs(outputs)
+        if subtask_text is not None:
+            # Attached after the output transforms, which forward `actions` only.
+            result["subtask"] = subtask_text
+        return result
+
+    def _decode_subtask(self, tokens: at.Array, mask: at.Array) -> str:
+        return self._subtask_tokenizer.detokenize(np.asarray(tokens[0]), np.asarray(mask[0]))
 
     @property
     def metadata(self) -> dict[str, Any]:

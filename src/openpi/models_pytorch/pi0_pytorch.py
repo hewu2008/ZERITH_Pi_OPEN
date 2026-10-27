@@ -86,6 +86,9 @@ class PI0Pytorch(nn.Module):
         super().__init__()
         self.config = config
         self.pi05 = config.pi05
+        if getattr(config, "train_subtask_prediction", False) or getattr(config, "sample_subtask_prediction", False):
+            # Only the JAX pi0.5 model implements the subtask stage; fail early instead of silently dropping it.
+            raise NotImplementedError("Pi0.5 subtask prediction is only implemented for the JAX model.")
 
         paligemma_config = _gemma.get_config(config.paligemma_variant)
         action_expert_config = _gemma.get_config(config.action_expert_variant)

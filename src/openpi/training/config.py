@@ -116,12 +116,26 @@ class ModelTransformFactory(GroupFactory):
                 )
             case _model.ModelType.PI05:
                 assert isinstance(model_config, pi0_config.Pi0Config)
+                tokenizer = _tokenizer.PaligemmaTokenizer(model_config.max_token_len)
+                if model_config.train_subtask_prediction or model_config.sample_subtask_prediction:
+                    return _transforms.Group(
+                        inputs=[
+                            _transforms.InjectDefaultPrompt(self.default_prompt),
+                            _transforms.ResizeImages(224, 224),
+                            _transforms.TokenizePi05SubtaskInputs(
+                                tokenizer,
+                                discrete_state_input=model_config.discrete_state_input,
+                                max_subtask_len=model_config.max_subtask_len,
+                            ),
+                            _transforms.PadStatesAndActions(model_config.action_dim),
+                        ],
+                    )
                 return _transforms.Group(
                     inputs=[
                         _transforms.InjectDefaultPrompt(self.default_prompt),
                         _transforms.ResizeImages(224, 224),
                         _transforms.TokenizePrompt(
-                            _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+                            tokenizer,
                             discrete_state_input=model_config.discrete_state_input,
                         ),
                         _transforms.PadStatesAndActions(model_config.action_dim),
@@ -200,32 +214,31 @@ class FakeDataConfig(DataConfigFactory):
         return DataConfig(repo_id=self.repo_id)
 
 
-def _build_multi_camera_repack_transform() -> _transforms.Group:
-    return _transforms.Group(
-        inputs=[
-            _transforms.RepackTransformWithFallback(
-                {
-                    "images": {
-                        "cam_high": [
-                            "observation.images.cam_high",
-                            "observation.images.rs.cam_high",
-                        ],
-                        "cam_left_wrist": [
-                            "observation.images.cam_left_wrist",
-                            "observation.images.rs.cam_left_wrist",
-                        ],
-                        "cam_right_wrist": [
-                            "observation.images.cam_right_wrist",
-                            "observation.images.rs.cam_right_wrist",
-                        ],
-                    },
-                    "state": "observation.state",
-                    "actions": "action",
-                    "prompt": "prompt",
-                }
-            )
-        ]
-    )
+def _build_multi_camera_repack_transform(include_subtask: bool = False) -> _transforms.Group:
+    # `include_subtask` lets the subtask text produced by `transforms.SubtaskFromIndex` survive the whitelist.
+    structure = {
+        "images": {
+            "cam_high": [
+                "observation.images.cam_high",
+                "observation.images.rs.cam_high",
+            ],
+            "cam_left_wrist": [
+                "observation.images.cam_left_wrist",
+                "observation.images.rs.cam_left_wrist",
+            ],
+            "cam_right_wrist": [
+                "observation.images.cam_right_wrist",
+                "observation.images.rs.cam_right_wrist",
+            ],
+        },
+        "state": "observation.state",
+        "actions": "action",
+        "prompt": "prompt",
+    }
+    if include_subtask:
+        structure["subtask"] = "subtask"
+
+    return _transforms.Group(inputs=[_transforms.RepackTransformWithFallback(structure)])
 
 
 @dataclasses.dataclass(frozen=True)
@@ -238,7 +251,9 @@ class LeRobotZerithJointDataConfig(DataConfigFactory):
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
-        repack_transform = _build_multi_camera_repack_transform()
+        repack_transform = _build_multi_camera_repack_transform(
+            include_subtask=getattr(model_config, "train_subtask_prediction", False)
+        )
         data_transforms = _transforms.Group(
             inputs=[zerith_joint_policy.MobilearxInputs(action_dim=model_config.action_dim, model_type=model_config.model_type)],
             outputs=[zerith_joint_policy.MobilearxOutputs()],
@@ -475,6 +490,60 @@ _CONFIGS = [
         ).get_freeze_filter(),
         ema_decay=0.999,
         # Checkpoints are saved to <checkpoint_base_dir>/<config name>/<exp_name>/.
+        checkpoint_base_dir="./openpi_checkpoints",
+        batch_size=8,
+        log_interval=1,
+        save_interval=1000,
+        num_train_steps=30000,
+    ),
+    TrainConfig(
+        # Pi0.5 with high-level subtask prediction (arXiv 2504.16054, Sec. IV-A). Identical to `pi05_zerith`
+        # except for the two subtask flags:
+        # - train_subtask_prediction: the prompt becomes `Task: .., State: ..;\nSubtask: <label>;\nAction: `
+        #   and the subtask tokens get a cross-entropy loss on top of the flow-matching action loss;
+        # - sample_subtask_prediction: inference is staged (generate the subtask, then decode actions).
+        # Subtask labels come from the per-frame `subtask_index` column mapped through
+        # `<dataset>/meta/subtasks.jsonl`. Until that file exists every frame has an empty label and the
+        # cross-entropy term is zero, so this config still trains plain pi0.5.
+        name="pi05_zerith_subtask",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            discrete_state_input=True,
+            paligemma_variant="gemma_2b_lora",
+            action_horizon=50,
+            action_expert_variant="gemma_300m",
+            train_subtask_prediction=True,
+            sample_subtask_prediction=True,
+            # Weight (alpha in paper Eq. 1) of the subtask cross-entropy added to the per-step action loss.
+            # `compute_loss` returns one value per (sample, action step) with the CE broadcast over the horizon,
+            # so `train.py`'s mean over both dims cancels that broadcast and the CE keeps exactly this weight.
+            # CE is ~10 nats early on (ln of the 257k vocabulary) against an O(1) action MSE, so alpha = 1 keeps
+            # the two terms comparable; raise it only if the generated subtasks are not being learned.
+            subtask_loss_weight=1.0,
+            max_subtask_len=20,
+        ),
+        data=LeRobotZerithJointDataConfig(
+            repo_id="hewu2008/clear_the_bin_box_20261026_clean",
+            assets=AssetsConfig(
+                assets_dir="./assets",
+                asset_id="hewu2008/clear_the_bin_box_20261026_clean",
+            ),
+            base_config=DataConfig(
+                local_files_only=True,
+                prompt_from_task=True,
+            ),
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1000,
+            peak_lr=1e-5,
+            decay_steps=60000,
+            decay_lr=1e-6,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/data/4T-1/hewu/model_zoo/pi05_base_params/params"),
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_horizon=50, action_expert_variant="gemma_300m"
+        ).get_freeze_filter(),
+        ema_decay=0.999,
         checkpoint_base_dir="./openpi_checkpoints",
         batch_size=8,
         log_interval=1,

@@ -100,8 +100,15 @@ def create_dataset(data_config: _config.DataConfig, model_config: _model.BaseMod
         local_files_only=True
     )
 
+    pre_transforms = []
     if data_config.prompt_from_task:
-        dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
+        pre_transforms.append(_transforms.PromptFromLeRobotTask(dataset_meta.tasks))
+    if getattr(model_config, "train_subtask_prediction", False):
+        # Maps the per-frame `subtask_index` column through `meta/subtasks.jsonl`. Without annotations the
+        # mapping is empty, so every frame gets an empty subtask and training stays plain pi0.5.
+        pre_transforms.append(_transforms.SubtaskFromIndex(_transforms.load_subtasks(dataset_meta.root)))
+    if pre_transforms:
+        dataset = TransformedDataset(dataset, pre_transforms)
 
     return dataset
 

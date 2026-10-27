@@ -1,5 +1,7 @@
 from collections.abc import Callable, Mapping, Sequence
 import dataclasses
+import json
+import pathlib
 import re
 from typing import Any, Protocol, TypeAlias, TypeVar, runtime_checkable
 
@@ -314,6 +316,101 @@ class TokenizePrompt(DataTransformFn):
 
         tokens, token_masks = self.tokenizer.tokenize(prompt, state)
         return {**data, "tokenized_prompt": tokens, "tokenized_prompt_mask": token_masks}
+
+
+def load_subtasks(root: str | pathlib.Path) -> dict[int, str]:
+    """Loads `<root>/meta/subtasks.jsonl`, one `{"subtask_index", "subtask"}` record per line.
+
+    Missing file means "no annotated subtasks", which simply disables the subtask loss.
+    """
+    path = pathlib.Path(root) / "meta" / "subtasks.jsonl"
+    if not path.exists():
+        return {}
+
+    subtasks = {}
+    for line in path.read_text().splitlines():
+        if not (line := line.strip()):
+            continue
+        record = json.loads(line)
+        subtasks[int(record["subtask_index"])] = str(record["subtask"])
+    return subtasks
+
+
+@dataclasses.dataclass(frozen=True)
+class SubtaskFromIndex(DataTransformFn):
+    """Maps the per-frame LeRobot `subtask_index` column to its subtask text.
+
+    Runs before the repack transform, so it reads the raw frame key. Frames without an annotation
+    (`subtask_index` = -1 or an unknown index) map to an empty string, which disables the loss for them.
+    """
+
+    subtasks: Mapping[int, str]
+
+    def __call__(self, data: DataDict) -> DataDict:
+        # The key is always set (empty string when the frame has no annotation) so that the repack whitelist can
+        # rely on it, and so that the tokenizer can tell a training batch from a serving request.
+        index = data.get("subtask_index")
+        return {**data, "subtask": "" if index is None else self.subtasks.get(int(index), "")}
+
+
+@dataclasses.dataclass(frozen=True)
+class TokenizePi05SubtaskInputs(DataTransformFn):
+    """pi0.5 tokenizer supporting the high-level subtask stage (paper Sec. IV-A).
+
+    Three modes, told apart by the `subtask` key that the training pipeline always attaches:
+    - non-empty label: encodes `Task: .., State: ..;\nSubtask: <subtask>;\nAction: ` and emits the
+      autoregressive / loss masks for the subtask cross-entropy;
+    - empty label (annotations not available yet): plain pi0.5 prompt, no subtask loss;
+    - no key at all (serving): reserves `max_subtask_len` slots for autoregressive generation.
+    """
+
+    tokenizer: _tokenizer.PaligemmaTokenizer
+    discrete_state_input: bool = False
+    max_subtask_len: int = 20
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if (prompt := data.pop("prompt", None)) is None:
+            raise ValueError("Prompt is required")
+
+        if self.discrete_state_input:
+            if (state := data.get("state", None)) is None:
+                raise ValueError("State is required.")
+        else:
+            state = None
+
+        if not isinstance(prompt, str):
+            prompt = prompt.item()
+
+        subtask = data.pop("subtask", None)
+        if subtask is not None and not isinstance(subtask, str):
+            subtask = subtask.item() if hasattr(subtask, "item") else str(subtask)
+
+        if subtask:
+            tokens, token_mask, ar_mask, loss_mask = self.tokenizer.tokenize_subtask_training(
+                prompt, subtask.strip(), state, max_subtask_len=self.max_subtask_len
+            )
+            return {
+                **data,
+                "tokenized_prompt": tokens,
+                "tokenized_prompt_mask": token_mask,
+                "token_ar_mask": ar_mask,
+                "token_loss_mask": loss_mask,
+            }
+
+        if subtask is not None:
+            # Training without subtask annotations: keep the plain pi0.5 prompt (no subtask loss).
+            tokens, token_mask = self.tokenizer.tokenize(prompt, state)
+            return {**data, "tokenized_prompt": tokens, "tokenized_prompt_mask": token_mask}
+
+        tokens, token_mask, ar_mask = self.tokenizer.tokenize_subtask_inference(
+            prompt, state, max_subtask_len=self.max_subtask_len
+        )
+        return {
+            **data,
+            "tokenized_prompt": tokens,
+            "tokenized_prompt_mask": token_mask,
+            "token_ar_mask": ar_mask,
+        }
 
 
 @dataclasses.dataclass(frozen=True)
