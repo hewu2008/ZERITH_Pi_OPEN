@@ -344,6 +344,10 @@ class Pi0(_model.BaseModel):
         the reserved block. The returned observation carries the generated subtask inside its prompt and can be fed
         straight to `sample_actions` (the low-level stage); the last two outputs are the generated ids and their
         validity mask, ready for detokenization.
+
+        The prefix is prefilled once into a fixed-size KV cache and every further token overwrites one of the reserved
+        slots in place (`cache_index`), so the decode loop keeps constant shapes and stays a `lax.while_loop` that
+        stops as soon as all samples have emitted an EOS. The remaining cost is one 2B-VLM weight streaming per token.
         """
         if not self.pi05:
             raise ValueError("Subtask prediction is only supported for pi0.5 models.")
@@ -358,24 +362,39 @@ class Pi0(_model.BaseModel):
         # First reserved slot, i.e. where the generated subtask starts (the prompt is prefix + slots + cue).
         start = jnp.argmax(~token_mask, axis=-1)
 
+        # Stage 1: one prefix forward (SigLIP + text embedding + attention keys/values of all prompt tokens).
+        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
+        prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
+        prefix_positions = jnp.cumsum(prefix_mask, axis=1) - 1
+        (prefix_out, _), kv_cache = self.PaliGemma.llm(
+            [prefix_tokens, None], mask=prefix_attn_mask, positions=prefix_positions
+        )
+        prefix_len = prefix_mask.shape[1]
+        # The cache holds the images followed by the whole padded prompt, so the reserved slots start at
+        # `num_image_tokens + start` and `max_subtask_len` extra slots are appended behind the prompt.
+        num_image_tokens = prefix_len - tokens.shape[1]
+        first_slot = num_image_tokens + start
+        cache_slots = jnp.arange(prefix_len + self.max_subtask_len)[None, :]
+        kv_cache = tuple(
+            jnp.concatenate(
+                [c, jnp.zeros(c.shape[:2] + (self.max_subtask_len,) + c.shape[3:], dtype=c.dtype)], axis=2
+            )
+            for c in kv_cache
+        )
+        cache_valid = jnp.concatenate(
+            [prefix_mask, jnp.zeros((batch_size, self.max_subtask_len), dtype=jnp.bool_)], axis=1
+        )
+        # The last prefix token (the trailing space of `Subtask: `) predicts the first subtask token. Note that
+        # `prefix_out` covers the image tokens too, so the text-space slot has to be shifted by their count.
+        hidden = prefix_out[rows, jnp.clip(first_slot - 1, 0, prefix_len - 1)][:, None, :]
+
+        # Stage 2: autoregressive decode, one subtask token per iteration.
         def cond(carry):
-            index, _, _, done = carry
+            index, _, _, done, _, _ = carry
             return (index < self.max_subtask_len) & ~jnp.all(done)
 
         def step(carry):
-            index, tokens, token_mask, done = carry
-            step_observation = dataclasses.replace(
-                observation, tokenized_prompt=tokens, tokenized_prompt_mask=token_mask
-            )
-            prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(step_observation)
-            prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
-            positions = jnp.cumsum(prefix_mask, axis=1) - 1
-            (prefix_out, _), _ = self.PaliGemma.llm(
-                [prefix_tokens, None], mask=prefix_attn_mask, positions=positions
-            )
-            # The previous slot holds the hidden state that predicts this subtask token (first step: the last
-            # prefix token, which is the trailing space of `Subtask: `).
-            hidden = prefix_out[rows, jnp.clip(start + index - 1, 0, tokens.shape[1] - 1)][:, None, :]
+            index, tokens, token_mask, done, kv_cache, hidden = carry
             logits = self.PaliGemma.llm(hidden, method="deembed")[:, 0]
             if temperature > 0.0:
                 next_token = jax.random.categorical(rng, logits / temperature, axis=-1)
@@ -385,10 +404,28 @@ class Pi0(_model.BaseModel):
             slot = start + index
             tokens = tokens.at[rows, slot].set(jnp.where(done, tokens[rows, slot], next_token))
             token_mask = token_mask.at[rows, slot].set(~done)
-            return index + 1, tokens, token_mask, done | (next_token == _tokenizer.PALIGEMMA_EOS_TOKEN)
+            done = done | (next_token == _tokenizer.PALIGEMMA_EOS_TOKEN)
+            # Decode the next token against the cache: visible keys are the valid prefix slots plus the subtask slots
+            # written so far, which excludes the reserved gap, the action cue and the prompt padding.
+            written = index + 1
+            key_mask = ((cache_slots < first_slot[:, None]) & cache_valid) | (
+                (cache_slots >= first_slot[:, None]) & (cache_slots < (first_slot + written)[:, None])
+            )
+            token_embedding = self.PaliGemma.llm(next_token[:, None], method="embed")
+            (hidden, _), kv_cache = self.PaliGemma.llm(
+                [token_embedding, None],
+                mask=key_mask[:, None, :],
+                # RoPE position counts every valid token before it, i.e. the image tokens included.
+                positions=(first_slot + index)[:, None],
+                kv_cache=kv_cache,
+                cache_index=first_slot + index,
+            )
+            return index + 1, tokens, token_mask, done, kv_cache, hidden[:, -1:]
 
-        _, tokens, token_mask, _ = jax.lax.while_loop(
-            cond, step, (jnp.asarray(0), tokens, token_mask, jnp.zeros((batch_size,), dtype=jnp.bool_))
+        _, tokens, token_mask, _, _, _ = jax.lax.while_loop(
+            cond,
+            step,
+            (jnp.asarray(0), tokens, token_mask, jnp.zeros((batch_size,), dtype=jnp.bool_), kv_cache, hidden),
         )
         # Compact the reserved slots back into a (b, max_subtask_len) block; unwritten slots stay masked.
         slots = jnp.clip(start[:, None] + jnp.arange(self.max_subtask_len)[None, :], 0, tokens.shape[1] - 1)
