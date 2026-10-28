@@ -479,7 +479,7 @@ _CONFIGS = [
         batch_size=8,
         log_interval=1,
         save_interval=1000,
-        num_train_steps=30000,
+        num_train_steps=60000,
     ),
 ]
 
