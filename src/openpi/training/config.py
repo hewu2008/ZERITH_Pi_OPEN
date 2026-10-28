@@ -450,11 +450,11 @@ _CONFIGS = [
         data=LeRobotZerithJointDataConfig(
             # LeRobot stores the converted dataset under <LEROBOT_HOME>/<repo_id>.
             # Keep this value aligned with the dataset path used during conversion.
-            repo_id="hewu2008/clear_the_bin_box_20261026_clean",
+            repo_id="hewu2008/part_sorting_20261027_clean",
             assets=AssetsConfig(
                 # Normalization stats are loaded from <assets_dir>/<asset_id>/norm_stats.json.
                 assets_dir="./assets",
-                asset_id="hewu2008/clear_the_bin_box_20261026_clean",
+                asset_id="hewu2008/part_sorting_20261027_clean",
             ),
             base_config=DataConfig(
                 local_files_only=True,
@@ -463,7 +463,7 @@ _CONFIGS = [
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=1000,
-            peak_lr=1e-5,
+            peak_lr=2.5e-5,
             decay_steps=60000,
             decay_lr=1e-6,
         ),
