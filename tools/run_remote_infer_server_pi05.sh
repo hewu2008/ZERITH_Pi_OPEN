@@ -20,7 +20,7 @@ mkdir -p logs
 
 python scripts/remote_infer_server.py \
   --policy.config pi05_zerith \
-  --policy.dir openpi_checkpoints/pi05_zerith/clear_the_bin_box_20261010_v1_30k_lr1e-5_bs8_ah50_pi05_full/29999 \
+  --policy.dir openpi_checkpoints/pi05_zerith/part_sorting_20261027_clean_60k_lr2.5e-5_bs8_ah50_pi05_lora/59999 \
   --default-prompt "Use the left arm to pick and place the door handle into the left bin. Use the right arm to pick and place the L-shaped bent pipe into the right bin. Put all other objects into the front bin." \
   --port 55555 \
   2>&1 | tee -a logs/remote_infer_server_pi05.log
