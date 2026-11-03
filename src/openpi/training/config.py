@@ -520,7 +520,7 @@ _CONFIGS = [
             # CE is ~10 nats early on (ln of the 257k vocabulary) against an O(1) action MSE, so alpha = 1 keeps
             # the two terms comparable; raise it only if the generated subtasks are not being learned.
             subtask_loss_weight=1.0,
-            max_subtask_len=20,
+            max_subtask_len=30,
         ),
         data=LeRobotZerithJointDataConfig(
             repo_id="hewu2008/part_sorting_20261027_subtask",
@@ -535,7 +535,7 @@ _CONFIGS = [
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=1000,
-            peak_lr=2.5e-5,
+            peak_lr=5e-5,
             decay_steps=60000,
             decay_lr=1e-6,
         ),
@@ -545,7 +545,7 @@ _CONFIGS = [
         ).get_freeze_filter(),
         ema_decay=0.999,
         checkpoint_base_dir="./openpi_checkpoints",
-        batch_size=8,
+        batch_size=16,
         log_interval=1,
         save_interval=2000,
         num_train_steps=60000,
