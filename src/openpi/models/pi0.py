@@ -206,6 +206,17 @@ class Pi0(_model.BaseModel):
     def compute_loss(
         self, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions, *, train: bool = False
     ) -> at.Float[at.Array, "*b ah"]:
+        action_loss, subtask_loss = self.compute_loss_terms(rng, observation, actions, train=train)
+        if not self.train_subtask_prediction:
+            return action_loss
+        # Paper Eq. 1: the flow-matching term plus a weighted cross-entropy on the subtask tokens.
+        return action_loss + self.subtask_loss_weight * subtask_loss[:, None]
+
+    @override
+    def compute_loss_terms(
+        self, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions, *, train: bool = False
+    ) -> tuple[at.Float[at.Array, "*b ah"], at.Float[at.Array, " b"]]:
+        """Flow-matching action loss and subtask cross-entropy, kept separate for logging."""
         preprocess_rng, noise_rng, time_rng = jax.random.split(rng, 3)
         observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
 
@@ -230,9 +241,8 @@ class Pi0(_model.BaseModel):
 
         action_loss = jnp.mean(jnp.square(v_t - u_t), axis=-1)
         if not self.train_subtask_prediction:
-            return action_loss
-        # Paper Eq. 1: the flow-matching term plus a weighted cross-entropy on the subtask tokens.
-        return action_loss + self.subtask_loss_weight * self.subtask_lm_loss(prefix_out, observation)[:, None]
+            return action_loss, jnp.zeros(batch_shape, dtype=jnp.float32)
+        return action_loss, self.subtask_lm_loss(prefix_out, observation)
 
     @at.typecheck
     def subtask_lm_loss(

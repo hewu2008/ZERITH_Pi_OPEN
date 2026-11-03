@@ -267,6 +267,18 @@ class BaseModel(nnx.Module, abc.ABC):
         train: bool = False,
     ) -> at.Float[at.Array, "*b ah"]: ...
 
+    def compute_loss_terms(
+        self,
+        rng: at.KeyArrayLike,
+        observation: Observation,
+        actions: Actions,
+        *,
+        train: bool = False,
+    ) -> tuple[at.Float[at.Array, "*b ah"], at.Float[at.Array, " b"]]:
+        """Split the loss into (flow-matching action loss, subtask CE loss) for logging."""
+        batch_shape = actions.shape[:-2]
+        return self.compute_loss(rng, observation, actions, train=train), jnp.zeros(batch_shape, dtype=jnp.float32)
+
     @abc.abstractmethod
     def sample_actions(self, rng: at.KeyArrayLike, observation: Observation) -> Actions: ...
 

@@ -517,9 +517,10 @@ _CONFIGS = [
             # Weight (alpha in paper Eq. 1) of the subtask cross-entropy added to the per-step action loss.
             # `compute_loss` returns one value per (sample, action step) with the CE broadcast over the horizon,
             # so `train.py`'s mean over both dims cancels that broadcast and the CE keeps exactly this weight.
-            # CE is ~10 nats early on (ln of the 257k vocabulary) against an O(1) action MSE, so alpha = 1 keeps
-            # the two terms comparable; raise it only if the generated subtasks are not being learned.
-            subtask_loss_weight=1.0,
+            # Measured at step 0: CE ~7.2 nats against a flow-matching MSE of ~0.6, so alpha = 0.1 makes the two
+            # terms comparable at initialization (0.72 vs 0.60). Raise it only if the generated subtasks are not
+            # being learned (e.g. ce_loss still > 1.5 after a few thousand steps or subtask match rate is low).
+            subtask_loss_weight=0.1,
             max_subtask_len=30,
         ),
         data=LeRobotZerithJointDataConfig(
