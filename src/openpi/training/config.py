@@ -526,7 +526,7 @@ _CONFIGS = [
             repo_id="hewu2008/part_sorting_20261027_subtask",
             assets=AssetsConfig(
                 assets_dir="./assets",
-                asset_id="hewu2008/clear_the_bin_box_20261026_clean",
+                asset_id="hewu2008/part_sorting_20261027_clean",
             ),
             base_config=DataConfig(
                 local_files_only=True,
