@@ -398,9 +398,16 @@ class TokenizePi05SubtaskInputs(DataTransformFn):
             }
 
         if subtask is not None:
-            # Training without subtask annotations: keep the plain pi0.5 prompt (no subtask loss).
+            # Training without subtask annotations: keep the plain pi0.5 prompt (no subtask loss), but emit the
+            # same key set as the annotated branch so batches can mix annotated and unannotated frames.
             tokens, token_mask = self.tokenizer.tokenize(prompt, state)
-            return {**data, "tokenized_prompt": tokens, "tokenized_prompt_mask": token_mask}
+            return {
+                **data,
+                "tokenized_prompt": tokens,
+                "tokenized_prompt_mask": token_mask,
+                "token_ar_mask": np.zeros_like(tokens, dtype=np.int32),
+                "token_loss_mask": np.zeros_like(tokens, dtype=np.bool_),
+            }
 
         tokens, token_mask, ar_mask = self.tokenizer.tokenize_subtask_inference(
             prompt, state, max_subtask_len=self.max_subtask_len
