@@ -523,7 +523,7 @@ _CONFIGS = [
             max_subtask_len=20,
         ),
         data=LeRobotZerithJointDataConfig(
-            repo_id="hewu2008/clear_the_bin_box_20261026_clean",
+            repo_id="hewu2008/part_sorting_20261027_subtask",
             assets=AssetsConfig(
                 assets_dir="./assets",
                 asset_id="hewu2008/clear_the_bin_box_20261026_clean",
@@ -535,7 +535,7 @@ _CONFIGS = [
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=1000,
-            peak_lr=1e-5,
+            peak_lr=2.5e-5,
             decay_steps=60000,
             decay_lr=1e-6,
         ),
@@ -547,8 +547,8 @@ _CONFIGS = [
         checkpoint_base_dir="./openpi_checkpoints",
         batch_size=8,
         log_interval=1,
-        save_interval=1000,
-        num_train_steps=30000,
+        save_interval=2000,
+        num_train_steps=60000,
     ),
 ]
 
