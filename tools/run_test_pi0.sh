@@ -18,6 +18,6 @@ sudo /home/robot/miniconda3/envs/lingbot-va/bin/python robot_infer/scripts/test_
   --port 55555 \
   --no_pin_head \
   --num_steps 864000 \
-  --prompt "Use the left arm to pick and place the door handle into the left bin. Use the right arm to pick and place the L-shaped bent pipe into the right bin. Put all other objects into the front bin." \
+  --prompt "Sort all objects into the correct bins using both arms" \
   --init_hdf5 /data/zerith_data/1_clear_the_bin_box_20261027/04742e2eb140434d87b5b8d213741c1e/episode.hdf5 \
   --s_min 18

@@ -172,7 +172,14 @@ class WebsocketPolicyServer:
                 infer_start = time.time()
                 observation = self._build_observation(obs)
                 action = self._policy.infer(observation)
-                logging.info("infer time: %.4fs", time.time() - infer_start)
+                infer_time = time.time() - infer_start
+                # pi0.5 staged inference attaches the decoded high-level subtask; log it so the robot-side
+                # client (which only consumes `actions`) can still be inspected for phase errors.
+                subtask = action.get("subtask")
+                if subtask is not None:
+                    logging.info("infer time: %.4fs | subtask: %s", infer_time, subtask)
+                else:
+                    logging.info("infer time: %.4fs", infer_time)
                 await websocket.send(packer.pack(action))
             except websockets.ConnectionClosed:
                 logging.info(f"Connection from {websocket.remote_address} closed")
