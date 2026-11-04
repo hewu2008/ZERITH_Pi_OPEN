@@ -17,6 +17,7 @@ Usage:
 """
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -51,6 +52,35 @@ def _parse_image(image) -> np.ndarray:
     if image.shape[0] == 3:
         image = einops.rearrange(image, "c h w -> h w c")
     return image
+
+
+def normalize_subtask(text: str) -> str:
+    """Compare-ready form of a subtask string.
+
+    The tokenizer's training template terminates the subtask with `;` right before `\\nAction: `, so the
+    generated text usually carries a trailing semicolon that the dataset labels do not have.
+    """
+    return text.strip().rstrip(";,. ").strip().lower()
+
+
+def load_subtasks(data_path: Path | None) -> dict[int, str]:
+    """Read `<dataset>/meta/subtasks.jsonl` into a {subtask_index: text} map.
+
+    Returns an empty map when the dataset has no subtask annotations (plain pi0.5 datasets).
+    """
+    if data_path is None:
+        return {}
+    path = data_path / "meta" / "subtasks.jsonl"
+    if not path.exists():
+        logging.warning("No subtasks.jsonl under %s; subtask labels are unavailable", data_path)
+        return {}
+    subtasks = {}
+    for line in path.read_text().splitlines():
+        if not (line := line.strip()):
+            continue
+        record = json.loads(line)
+        subtasks[int(record["subtask_index"])] = str(record["subtask"])
+    return subtasks
 
 
 def build_observation(sample: dict, default_prompt: str | None = None) -> dict:
@@ -126,6 +156,7 @@ def evaluate_single_trajectory(
     save_plot_path: str | None = None,
     max_infer_time: int = 10,
     default_prompt: str | None = None,
+    subtasks: dict[int, str] | None = None,
 ):
     start_id = int(dataset.episode_data_index["from"][traj_id])
     end_id = int(dataset.episode_data_index["to"][traj_id])
@@ -133,6 +164,7 @@ def evaluate_single_trajectory(
     gt_action_chunks = []
     state_joints_chunks = []
     pred_action_chunks = []
+    subtask_pairs = []  # (ground-truth label, predicted label), one pair per chunk
 
     count = 0
     for data_id in range(start_id, end_id, action_horizon):
@@ -152,6 +184,20 @@ def evaluate_single_trajectory(
         pred_action_chunk = result["actions"]
         if pred_action_chunk.ndim == 1:
             pred_action_chunk = pred_action_chunk[np.newaxis, :]
+
+        if "subtask" in result:
+            gt_index = sample.get("subtask_index")
+            gt_subtask = "" if gt_index is None else (subtasks or {}).get(int(_to_numpy(gt_index).item()), "")
+            pred_subtask = str(result["subtask"])
+            subtask_pairs.append((gt_subtask, pred_subtask))
+            logging.info(
+                "Chunk %d (frames %d-%d): subtask gt=%r pred=%r",
+                count,
+                data_id,
+                data_id + action_horizon,
+                gt_subtask,
+                pred_subtask,
+            )
 
         # The model always predicts `config.action_horizon` frames, while the
         # ground-truth window sampled from the dataset has `action_horizon` frames.
@@ -181,6 +227,24 @@ def evaluate_single_trajectory(
     logging.info(f"gt_action_joints vs time {gt_action_across_time.shape}")
     logging.info(f"pred_action_joints vs time {pred_action_across_time.shape}")
 
+    # Subtask agreement is exact-match on the decoded text; chunks whose frame has no annotation
+    # (`subtask_index` = -1) are excluded, matching the training-side loss mask.
+    subtask_matches = 0
+    subtask_total = 0
+    if subtask_pairs:
+        compared = [(normalize_subtask(gt), normalize_subtask(pred)) for gt, pred in subtask_pairs if gt]
+        subtask_total = len(compared)
+        subtask_matches = sum(gt == pred for gt, pred in compared)
+        if subtask_total:
+            logging.info(
+                "Subtask accuracy across single traj: %d/%d = %.4f",
+                subtask_matches,
+                subtask_total,
+                subtask_matches / subtask_total,
+            )
+            for gt, pred in [pair for pair in compared if pair[0] != pair[1]][:10]:
+                logging.info("  subtask mismatch gt=%r pred=%r", gt, pred)
+
     plot_trajectory_results(
         state_joints_across_time=state_joints_across_time,
         gt_action_across_time=gt_action_across_time,
@@ -190,7 +254,7 @@ def evaluate_single_trajectory(
         save_plot_path=save_plot_path or f"/tmp/open_loop_eval/traj_{traj_id}.jpeg",
     )
 
-    return mse, mae
+    return mse, mae, subtask_matches, subtask_total
 
 
 def main(
@@ -229,6 +293,9 @@ def main(
     fps = dataset_meta.fps
     logging.info("Dataset FPS: %d", fps)
 
+    subtasks = load_subtasks(root)
+    logging.info("Loaded %d subtask labels", len(subtasks))
+
     delta_timestamps = {"action": [t / fps for t in range(action_horizon)]}
     dataset = LeRobotDataset(repo_id, root=root, delta_timestamps=delta_timestamps, local_files_only=True)
     logging.info("Dataset length: %d", len(dataset))
@@ -236,6 +303,8 @@ def main(
 
     all_mse = []
     all_mae = []
+    subtask_matches_total = 0
+    subtask_total = 0
 
     num_episodes = dataset.num_episodes
     for traj_id in traj_ids:
@@ -244,7 +313,7 @@ def main(
             continue
 
         logging.info("Running trajectory: %d", traj_id)
-        mse, mae = evaluate_single_trajectory(
+        mse, mae, traj_subtask_matches, traj_subtask_total = evaluate_single_trajectory(
             policy,
             dataset,
             traj_id,
@@ -252,10 +321,13 @@ def main(
             save_plot_path=os.path.join(save_plot_path, f"{traj_id}.png"),
             max_infer_time=max_infer_time,
             default_prompt=default_prompt,
+            subtasks=subtasks,
         )
         logging.info("MSE for trajectory %d: %.6f, MAE: %.6f", traj_id, mse, mae)
         all_mse.append(mse)
         all_mae.append(mae)
+        subtask_matches_total += traj_subtask_matches
+        subtask_total += traj_subtask_total
 
     if all_mse:
         avg_mse = np.mean(np.array(all_mse))
@@ -264,6 +336,13 @@ def main(
         logging.info("Average MAE across all trajs: %.6f", avg_mae)
     else:
         logging.info("No valid trajectories were evaluated.")
+    if subtask_total:
+        logging.info(
+            "Subtask accuracy across all trajs: %d/%d = %.4f",
+            subtask_matches_total,
+            subtask_total,
+            subtask_matches_total / subtask_total,
+        )
     logging.info("Done")
 
 
