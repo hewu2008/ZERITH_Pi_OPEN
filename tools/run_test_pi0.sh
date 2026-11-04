@@ -1,8 +1,9 @@
 #!/bin/bash
 #
 # RTC guidance is enabled by default (identity mode on the server). Passing
-# --rtc is kept for explicitness/compatibility. To tune it, append e.g.:
-#   --s_min 15
+# --rtc is kept for explicitness/compatibility. s_min is raised to 18 steps
+# (0.6 s at 30 Hz) because the subtask stage pushes inference latency to ~300 ms
+# (~9 control steps); keep the paper constraint d <= s <= H - d.
 # The client refuses to start against a server that does not advertise RTC
 # support (the server enables RTC by default; --rtc.no-enabled turns it off).
 
@@ -19,3 +20,4 @@ sudo /home/robot/miniconda3/envs/lingbot-va/bin/python robot_infer/scripts/test_
   --num_steps 864000 \
   --prompt "Use the left arm to pick and place the door handle into the left bin. Use the right arm to pick and place the L-shaped bent pipe into the right bin. Put all other objects into the front bin." \
   --init_hdf5 /data/zerith_data/1_clear_the_bin_box_20261027/04742e2eb140434d87b5b8d213741c1e/episode.hdf5 \
+  --s_min 18

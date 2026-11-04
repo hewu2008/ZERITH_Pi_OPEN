@@ -23,4 +23,5 @@ python scripts/remote_infer_server.py \
   --policy.dir openpi_checkpoints/pi05_zerith_subtask/part_sorting_20261027_subtask_60k_lr2.5e-5_bs8_ah50_pi05_lora/59999 \
   --default-prompt "Sort all objects into the correct bins using both arms" \
   --port 55555 \
+  --rtc.s_min 18 \
   2>&1 | tee -a logs/remote_infer_server_pi05_subtask.log
