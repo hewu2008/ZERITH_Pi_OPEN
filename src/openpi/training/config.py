@@ -605,7 +605,7 @@ _CONFIGS = [
         ).get_freeze_filter(),
         ema_decay=0.999,
         checkpoint_base_dir="./openpi_checkpoints",
-        batch_size=16,
+        batch_size=8,
         log_interval=1,
         save_interval=2000,
         num_train_steps=8000,

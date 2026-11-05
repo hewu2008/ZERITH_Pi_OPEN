@@ -101,6 +101,9 @@ class MobilearxInputs(transforms.DataTransformFn):
         # Forward the optional high-level subtask label (pi0.5 subtask prediction) to the model transforms.
         if "subtask" in data:
             inputs["subtask"] = data["subtask"]
+        # Same for the integer subtask class used by the pi0.5 classification head (training only).
+        if "subtask_class" in data:
+            inputs["subtask_class"] = data["subtask_class"]
         return inputs
 
 
