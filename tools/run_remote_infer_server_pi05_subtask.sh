@@ -23,7 +23,7 @@ mkdir -p logs
 
 python scripts/remote_infer_server.py \
   --policy.config pi05_zerith_subtask_cls \
-  --policy.dir openpi_checkpoints/pi05_zerith_subtask_cls/part_sorting_20261027_subtask_cls_8k_lr1e-3_bs8/7999 \
+  --policy.dir openpi_checkpoints/pi05_zerith_subtask_cls/part_sorting_20261027_subtask_cls_headlr1e-3_16k_lr1e-5_bs8/15999 \
   --default-prompt "Sort all objects into the correct bins using both arms" \
   --subtask.mode classifier \
   --port 55555 \

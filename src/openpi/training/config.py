@@ -589,11 +589,14 @@ _CONFIGS = [
             ),
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
+            # lr for the backbone (LoRA + action expert + SigLIP). The classification head is randomly initialized
+            # again (the 60k checkpoint has no head), so `AdamWGroupedLR` gives it 100x this lr (peak 1e-3).
             warmup_steps=200,
             peak_lr=1e-5,
-            decay_steps=8000,
+            decay_steps=16000,
             decay_lr=1e-6,
         ),
+        optimizer=_optimizer.AdamWGroupedLR(head_lr_scale=100.0),
         weight_loader=weight_loaders.CheckpointWeightLoader(
             "openpi_checkpoints/pi05_zerith_subtask/"
             "part_sorting_20261027_subtask_60k_lr2.5e-5_bs8_ah50_pi05_lora/59999/params",
@@ -607,7 +610,7 @@ _CONFIGS = [
         batch_size=8,
         log_interval=1,
         save_interval=2000,
-        num_train_steps=8000,
+        num_train_steps=16000,
     ),
 ]
 

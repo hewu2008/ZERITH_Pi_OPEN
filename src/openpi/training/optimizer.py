@@ -1,6 +1,8 @@
 import dataclasses
+import re
 from typing import Protocol, runtime_checkable
 
+import jax
 import jax.numpy as jnp
 import optax
 
@@ -82,6 +84,57 @@ class AdamW(OptimizerConfig):
         )
 
         return optax.chain(optax.clip_by_global_norm(self.clip_gradient_norm), tx)
+
+
+@dataclasses.dataclass(frozen=True)
+class AdamWGroupedLR(OptimizerConfig):
+    """AdamW with a separate, much larger lr for the subtask classification head.
+
+    The head is randomly initialized while the rest of the policy is already converged, so a single lr cannot serve
+    both: the head needs ~1e-3, the backbone ~1e-5. Parameters are split by path (`head_param_regex`) instead of by
+    variable type, so it works with any `trainable_filter`. The head lr is `head_lr_scale` times the configured
+    schedule, i.e. it follows the same warmup/cosine shape.
+    """
+
+    b1: float = 0.9
+    b2: float = 0.95
+    eps: float = 1e-8
+    weight_decay: float = 1e-10
+    clip_gradient_norm: float = 1.0
+    head_param_regex: str = ".*subtask_classifier.*"
+    head_lr_scale: float = 100.0
+
+    def create(
+        self,
+        lr: optax.ScalarOrSchedule,
+        weight_decay_mask: at.PyTree | None = None,
+    ) -> optax.GradientTransformation:
+        pattern = re.compile(self.head_param_regex)
+        head_lr = (lambda count: lr(count) * self.head_lr_scale) if callable(lr) else lr * self.head_lr_scale
+
+        def build(param_types_source: at.PyTree) -> optax.GradientTransformation:
+            # The mask has to follow the parameter tree, which is only known once `init`/`update` is called.
+            mask = jax.tree_util.tree_map_with_path(
+                lambda path, _: "head" if pattern.search(jax.tree_util.keystr(path)) else "rest",
+                param_types_source,
+            )
+            adamw_kwargs = {"b1": self.b1, "b2": self.b2, "eps": self.eps, "weight_decay": self.weight_decay,
+                            "mask": weight_decay_mask}
+            return optax.chain(
+                optax.clip_by_global_norm(self.clip_gradient_norm),
+                optax.multi_transform(
+                    {"head": optax.adamw(head_lr, **adamw_kwargs), "rest": optax.adamw(lr, **adamw_kwargs)},
+                    mask,
+                ),
+            )
+
+        def init(params: at.Params) -> optax.OptState:
+            return build(params).init(params)
+
+        def update(updates, state, params=None, **extra_args):
+            return build(params).update(updates, state, params, **extra_args)
+
+        return optax.GradientTransformation(init, update)
 
 
 @dataclasses.dataclass(frozen=True)
