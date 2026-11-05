@@ -41,12 +41,28 @@ class Pi0Config(_model.BaseModelConfig):
     max_subtask_len: int = 20
     # 0.0 selects the argmax token (greedy), > 0.0 samples with `logits / temperature`.
     subtask_temperature: float = 0.0
+    # Fast inference alternative to autoregressive subtask generation: a lightweight classifier read out of the
+    # last prefix hidden state predicts a fixed subtask class, which is then mapped back to text. Training keeps the
+    # token-level cross-entropy above, so the generation path stays available as a fallback.
+    subtask_classification: bool = False
+    # Number of subtask classes (rows of the dataset's `meta/subtasks.jsonl`); required when classification is on.
+    num_subtask_classes: int = 0
+    # Weight of the subtask classification cross-entropy added to the action loss.
+    subtask_class_loss_weight: float = 0.2
 
     def __post_init__(self):
         if self.max_token_len is None:
             object.__setattr__(self, "max_token_len", 200 if self.pi05 else 48)
         if self.discrete_state_input is None: 
             object.__setattr__(self, "discrete_state_input", self.pi05)
+        if self.subtask_classification:
+            if not self.pi05 or not self.train_subtask_prediction:
+                raise ValueError(
+                    "`subtask_classification` requires a pi0.5 model with `train_subtask_prediction=True` "
+                    "(the classifier reads out the subtask prompt layout)."
+                )
+            if self.num_subtask_classes <= 0:
+                raise ValueError("`num_subtask_classes` must be positive when `subtask_classification` is on.")
 
     @property
     @override

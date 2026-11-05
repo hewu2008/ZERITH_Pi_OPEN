@@ -1,6 +1,9 @@
 import asyncio
 import dataclasses
+import json
 import logging
+import os
+import pathlib
 import socket
 import time
 import traceback
@@ -80,6 +83,17 @@ class RTCArgs:
 
 
 @dataclasses.dataclass
+class SubtaskArgs:
+    """Settings for the pi0.5 high-level subtask stage."""
+
+    # "classifier" (default): one prefix forward + a fixed-class head, then the subtask text is looked up;
+    # "generate": autoregressive subtask text, the original slower path kept for A/B comparisons.
+    mode: str = "classifier"
+    # Class table path; defaults to `$LEROBOT_HOME/<repo_id>/meta/subtasks.jsonl` of the training config.
+    jsonl: str | None = None
+
+
+@dataclasses.dataclass
 class Args:
     """Arguments for the websocket policy server."""
 
@@ -97,9 +111,34 @@ class Args:
     # Real-Time Chunking guidance (enabled by default, identity mode).
     rtc: RTCArgs = dataclasses.field(default_factory=RTCArgs)
 
+    # pi0.5 staged inference: subtask classifier (fast) or autoregressive generation (fallback).
+    subtask: SubtaskArgs = dataclasses.field(default_factory=SubtaskArgs)
+
+
+def _resolve_subtask_jsonl(path: str | None, train_config: _config.TrainConfig) -> pathlib.Path:
+    if path is not None:
+        return pathlib.Path(path)
+    home = os.environ.get("LEROBOT_HOME")
+    if home is None:
+        raise ValueError("`--subtask.jsonl` was not given and `LEROBOT_HOME` is unset.")
+    return pathlib.Path(home) / str(train_config.data.repo_id) / "meta" / "subtasks.jsonl"
+
+
+def _load_subtask_classes(path: pathlib.Path) -> list[str]:
+    """Loads the class table ordered by `subtask_index`; the classifier output index must match the row order."""
+    if not path.exists():
+        raise FileNotFoundError(f"Subtask class table not found: {path}. Pass `--subtask.jsonl` explicitly.")
+    records = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    records.sort(key=lambda record: int(record["subtask_index"]))
+    indices = [int(record["subtask_index"]) for record in records]
+    if indices != list(range(len(records))):
+        raise ValueError(f"`subtask_index` must be contiguous from 0 in {path}, got {indices}.")
+    return [str(record["subtask"]) for record in records]
+
 
 def create_policy(args: Args) -> _policy.Policy:
     """Create a policy from the given arguments."""
+    train_config = _config.get_config(args.policy.config)
     rtc_config = None
     if args.rtc.enabled:
         rtc_config = _rtc_policy.RTCServerConfig(
@@ -108,11 +147,20 @@ def create_policy(args: Args) -> _policy.Policy:
             guidance_steps=args.rtc.guidance_steps,
             s_min=args.rtc.s_min,
         )
+    subtask_classes = None
+    if args.subtask.mode == "classifier":
+        subtask_path = _resolve_subtask_jsonl(args.subtask.jsonl, train_config)
+        subtask_classes = _load_subtask_classes(subtask_path)
+        logging.info("Subtask classifier enabled with %d classes from %s", len(subtask_classes), subtask_path)
+    else:
+        logging.info("Subtask mode: %s (autoregressive generation)", args.subtask.mode)
     return _policy_config.create_trained_policy(
-        _config.get_config(args.policy.config),
+        train_config,
         args.policy.dir,
         default_prompt=args.default_prompt,
         rtc_config=rtc_config,
+        subtask_classes=subtask_classes,
+        subtask_mode=args.subtask.mode,
     )
 
 

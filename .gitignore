@@ -34,3 +34,6 @@ sanity_dump/
 
 # open-loop
 open_loop_test/
+
+# trae
+.trae/

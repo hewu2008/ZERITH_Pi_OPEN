@@ -46,12 +46,15 @@ class CheckpointWeightLoader(WeightLoader):
     """
 
     params_path: str
+    # Regex of parameters that are missing from the checkpoint and keep their freshly initialized values.
+    # The default backfills LoRA adapters when starting from a base checkpoint without them; warm-starting a new
+    # head from a finished run extends it, e.g. ".*lora.*|.*subtask_classifier.*".
+    missing_regex: str = ".*lora.*"
 
     def load(self, params: at.Params) -> at.Params:
         # We are loading np.ndarray and relying on the training code to properly convert and shard the params.
         loaded_params = _model.restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
-        # Add all missing LoRA weights.
-        return _merge_params(loaded_params, params, missing_regex=".*lora.*")
+        return _merge_params(loaded_params, params, missing_regex=self.missing_regex)
 
 
 @dataclasses.dataclass(frozen=True)

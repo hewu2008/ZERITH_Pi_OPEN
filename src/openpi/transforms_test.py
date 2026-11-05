@@ -138,11 +138,19 @@ def test_load_subtasks():
 def test_extract_subtask_from_index():
     transform = _transforms.SubtaskFromIndex({0: "grab the handle"})
 
-    assert transform({"subtask_index": np.int64(0)})["subtask"] == "grab the handle"
+    annotated = transform({"subtask_index": np.int64(0)})
+    assert annotated["subtask"] == "grab the handle"
+    # `subtask_class` carries the same label as an integer for the classification head.
+    assert annotated["subtask_class"] == 0
     # Unannotated frames (and datasets without the column) map to an empty subtask; the key is always set so the
-    # tokenizer can tell a training batch (key present) from a serving request (key absent).
+    # tokenizer can tell a training batch (key present) from a serving request (key absent). The class is -1 so the
+    # classification loss can ignore the frame.
     assert transform({"subtask_index": np.int64(-1)})["subtask"] == ""
+    assert transform({"subtask_index": np.int64(-1)})["subtask_class"] == -1
     assert transform({})["subtask"] == ""
+    assert transform({})["subtask_class"] == -1
+    # Unknown index: no text and ignored by the classification loss.
+    assert transform({"subtask_index": np.int64(7)})["subtask_class"] == -1
 
 
 def test_tokenize_pi05_subtask_training():
@@ -177,8 +185,9 @@ def test_tokenize_pi05_subtask_training_without_label():
     }
     out = transform(dict(item))
 
-    # No annotation: plain pi0.5 prompt, so the subtask cross-entropy contributes nothing.
-    assert "token_loss_mask" not in out
+    # No annotation: plain pi0.5 prompt, so the subtask cross-entropy contributes nothing. The key is still emitted
+    # (all-False) so annotated and unannotated frames can share a batch.
+    assert not out["token_loss_mask"].any()
     assert out["tokenized_prompt_mask"].sum() > 0
 
 

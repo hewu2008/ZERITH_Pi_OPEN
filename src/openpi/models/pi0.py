@@ -67,6 +67,23 @@ def posemb_sincos(
     return jnp.concatenate([jnp.sin(sinusoid_input), jnp.cos(sinusoid_input)], axis=-1)
 
 
+class SubtaskClassifier(nnx.Module):
+    """Lightweight subtask readout: LayerNorm -> Linear -> GELU -> Linear (13-way).
+
+    Kept as named submodules (rather than `nnx.Sequential`) so parameter keys stay strings and the checkpoint
+    merge (`flax.traverse_util.flatten_dict`) can handle them.
+    """
+
+    def __init__(self, width: int, hidden_dim: int, num_classes: int, *, rngs: nnx.Rngs):
+        self.norm = nnx.LayerNorm(width, rngs=rngs)
+        self.hidden = nnx.Linear(width, hidden_dim, rngs=rngs)
+        self.out = nnx.Linear(hidden_dim, num_classes, rngs=rngs)
+
+    def __call__(self, x):
+        x = self.norm(x)
+        return self.out(nnx.gelu(self.hidden(x)))
+
+
 class Pi0(_model.BaseModel):
     def __init__(self, config: pi0_config.Pi0Config, rngs: nnx.Rngs):
         super().__init__(config.action_dim, config.action_horizon, config.max_token_len)
@@ -76,6 +93,9 @@ class Pi0(_model.BaseModel):
         self.subtask_loss_weight = config.subtask_loss_weight
         self.max_subtask_len = config.max_subtask_len
         self.subtask_temperature = config.subtask_temperature
+        self.subtask_classification = config.subtask_classification
+        self.num_subtask_classes = config.num_subtask_classes
+        self.subtask_class_loss_weight = config.subtask_class_loss_weight
         paligemma_config = _gemma.get_config(config.paligemma_variant)
         action_expert_config = _gemma.get_config(config.action_expert_variant)
         # TODO: rewrite gemma in NNX. For now, use bridge.
@@ -107,6 +127,14 @@ class Pi0(_model.BaseModel):
             self.action_time_mlp_in = nnx.Linear(2 * action_expert_config.width, action_expert_config.width, rngs=rngs)
             self.action_time_mlp_out = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
         self.action_out_proj = nnx.Linear(action_expert_config.width, config.action_dim, rngs=rngs)
+        if config.subtask_classification:
+            # Lightweight readout of the subtask decision, applied to the last prefix hidden state (see
+            # `subtask_class_logits`). The LayerNorm keeps the bf16 residual stream well conditioned and the hidden
+            # layer separates classes that share a leading verb; both layers stay fp32 (~1M params, negligible
+            # against the 2B VLM).
+            self.subtask_classifier = SubtaskClassifier(
+                paligemma_config.width, 512, config.num_subtask_classes, rngs=rngs
+            )
 
     @at.typecheck
     def embed_prefix(
@@ -206,17 +234,22 @@ class Pi0(_model.BaseModel):
     def compute_loss(
         self, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions, *, train: bool = False
     ) -> at.Float[at.Array, "*b ah"]:
-        action_loss, subtask_loss = self.compute_loss_terms(rng, observation, actions, train=train)
-        if not self.train_subtask_prediction:
-            return action_loss
-        # Paper Eq. 1: the flow-matching term plus a weighted cross-entropy on the subtask tokens.
-        return action_loss + self.subtask_loss_weight * subtask_loss[:, None]
+        action_loss, subtask_loss, subtask_class_loss = self.compute_loss_terms(rng, observation, actions, train=train)
+        total_loss = action_loss
+        if self.train_subtask_prediction:
+            # Paper Eq. 1: the flow-matching term plus a weighted cross-entropy on the subtask tokens.
+            total_loss = total_loss + self.subtask_loss_weight * subtask_loss[:, None]
+        if self.subtask_classification:
+            total_loss = total_loss + self.subtask_class_loss_weight * subtask_class_loss[:, None]
+        return total_loss
 
     @override
     def compute_loss_terms(
         self, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions, *, train: bool = False
-    ) -> tuple[at.Float[at.Array, "*b ah"], at.Float[at.Array, " b"]]:
-        """Flow-matching action loss and subtask cross-entropy, kept separate for logging."""
+    ) -> tuple[
+        at.Float[at.Array, "*b ah"], at.Float[at.Array, " b"], at.Float[at.Array, " b"]
+    ]:
+        """Flow-matching action loss, subtask cross-entropy and subtask class cross-entropy, kept separate for logging."""
         preprocess_rng, noise_rng, time_rng = jax.random.split(rng, 3)
         observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
 
@@ -240,9 +273,12 @@ class Pi0(_model.BaseModel):
         v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
 
         action_loss = jnp.mean(jnp.square(v_t - u_t), axis=-1)
+        zeros = jnp.zeros(batch_shape, dtype=jnp.float32)
         if not self.train_subtask_prediction:
-            return action_loss, jnp.zeros(batch_shape, dtype=jnp.float32)
-        return action_loss, self.subtask_lm_loss(prefix_out, observation)
+            return action_loss, zeros, zeros
+        subtask_ce = self.subtask_lm_loss(prefix_out, observation)
+        class_ce = self.subtask_class_loss(prefix_out, observation) if self.subtask_classification else zeros
+        return action_loss, subtask_ce, class_ce
 
     @at.typecheck
     def subtask_lm_loss(
@@ -261,6 +297,66 @@ class Pi0(_model.BaseModel):
         ce = optax.softmax_cross_entropy_with_integer_labels(logits.astype(jnp.float32), targets)
         # Frames without an annotation carry an all-False mask, hence a zero (and gradient-free) loss.
         return jnp.sum(ce * weights, axis=-1) / jnp.clip(jnp.sum(weights, axis=-1), 1.0)
+
+    @at.typecheck
+    def _subtask_cue_hidden(
+        self, prefix_out: at.Float[at.Array, "b s emb"], observation: _model.Observation
+    ) -> at.Float[at.Array, "b emb"]:
+        """Hidden state at the last prefix token, i.e. the text boundary the first subtask token reads from.
+
+        In both layouts the first autoregressive token is the first subtask token (training: the first real label
+        token; inference: the first reserved slot), so the token right before it is the tail of `Subtask: `. The
+        position is identical in both layouts because the reserved slots are masked out of the position cumsum.
+        """
+        assert observation.tokenized_prompt is not None, "Tokenized prompt is required for subtask classification"
+        assert observation.token_ar_mask is not None, "Token AR mask is required for subtask classification"
+
+        text_len = observation.tokenized_prompt.shape[1]
+        num_image = prefix_out.shape[1] - text_len
+        ar_mask = (observation.token_ar_mask > 0).astype(jnp.int32)
+        has_ar = jnp.any(ar_mask > 0, axis=-1)
+        # Unannotated frames use the plain pi0.5 prompt (no AR block), so fall back to the last prompt token.
+        cue = jnp.where(has_ar, jnp.argmax(ar_mask, axis=-1) - 1, text_len - 1)
+        cue = jnp.clip(cue, 0, text_len - 1)
+        return prefix_out[jnp.arange(prefix_out.shape[0]), num_image + cue]
+
+    @at.typecheck
+    def subtask_class_logits(
+        self, prefix_out: at.Float[at.Array, "b s emb"], observation: _model.Observation
+    ) -> at.Float[at.Array, "b k"]:
+        if not self.subtask_classification:
+            raise ValueError("Subtask classification head is disabled in this model config.")
+        # Keep the head in fp32: a 13-way readout straight off the bf16 residual stream is poorly conditioned.
+        return self.subtask_classifier(self._subtask_cue_hidden(prefix_out, observation).astype(jnp.float32))
+
+    @at.typecheck
+    def subtask_class_loss(
+        self, prefix_out: at.Float[at.Array, "b s emb"], observation: _model.Observation
+    ) -> at.Float[at.Array, " b"]:
+        """Cross-entropy of the subtask class, ignoring frames without an annotation (`subtask_class` = -1)."""
+        assert observation.subtask_class is not None, "Subtask class label is required for subtask classification"
+        labels = observation.subtask_class.astype(jnp.int32)
+        valid = labels >= 0
+        logits = self.subtask_class_logits(prefix_out, observation)
+        ce = optax.softmax_cross_entropy_with_integer_labels(logits, jnp.where(valid, labels, 0))
+        # One label per sample, so the per-sample loss is just the masked CE: unannotated frames contribute zero
+        # (and zero gradient), which is exactly the ignored-label semantics.
+        return ce * valid.astype(jnp.float32)
+
+    @at.typecheck
+    def predict_subtask_class(self, observation: _model.Observation) -> at.Int[at.Array, " b"]:
+        """Fast subtask stage: a single prefix forward plus the classifier, no autoregressive decoding."""
+        if not self.subtask_classification:
+            raise ValueError("Subtask classification head is disabled in this model config.")
+        observation = _model.preprocess_observation(None, observation, train=False)
+        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
+        prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
+        positions = jnp.cumsum(prefix_mask, axis=1) - 1
+        (prefix_out, _), _ = self.PaliGemma.llm(
+            [prefix_tokens, None], mask=prefix_attn_mask, positions=positions
+        )
+        logits = self.subtask_class_logits(prefix_out, observation)
+        return jnp.argmax(logits, axis=-1).astype(jnp.int32)
 
     @at.typecheck
     def suffix_velocity(

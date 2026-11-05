@@ -214,7 +214,9 @@ class FakeDataConfig(DataConfigFactory):
         return DataConfig(repo_id=self.repo_id)
 
 
-def _build_multi_camera_repack_transform(include_subtask: bool = False) -> _transforms.Group:
+def _build_multi_camera_repack_transform(
+    include_subtask: bool = False, include_subtask_class: bool = False
+) -> _transforms.Group:
     # `include_subtask` lets the subtask text produced by `transforms.SubtaskFromIndex` survive the whitelist.
     structure = {
         "images": {
@@ -237,6 +239,8 @@ def _build_multi_camera_repack_transform(include_subtask: bool = False) -> _tran
     }
     if include_subtask:
         structure["subtask"] = "subtask"
+    if include_subtask_class:
+        structure["subtask_class"] = "subtask_class"
 
     return _transforms.Group(inputs=[_transforms.RepackTransformWithFallback(structure)])
 
@@ -252,7 +256,8 @@ class LeRobotZerithJointDataConfig(DataConfigFactory):
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         repack_transform = _build_multi_camera_repack_transform(
-            include_subtask=getattr(model_config, "train_subtask_prediction", False)
+            include_subtask=getattr(model_config, "train_subtask_prediction", False),
+            include_subtask_class=getattr(model_config, "subtask_classification", False),
         )
         data_transforms = _transforms.Group(
             inputs=[zerith_joint_policy.MobilearxInputs(action_dim=model_config.action_dim, model_type=model_config.model_type)],
@@ -550,6 +555,60 @@ _CONFIGS = [
         log_interval=1,
         save_interval=2000,
         num_train_steps=60000,
+    ),
+    TrainConfig(
+        # Warm-started from the finished `pi05_zerith_subtask` run (59999) to add the subtask classification head
+        # (see `.trae/documents/subtask_classifier_head_plan.md`). Everything else is unchanged: the token-level
+        # subtask cross-entropy stays on, so autoregressive generation remains available as a serving fallback.
+        # The classification head is randomly initialized, hence the separate `missing_regex` that also lets
+        # `subtask_classifier` keep its fresh values instead of failing the strict checkpoint merge.
+        name="pi05_zerith_subtask_cls",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            discrete_state_input=True,
+            paligemma_variant="gemma_2b_lora",
+            action_horizon=50,
+            action_expert_variant="gemma_300m",
+            train_subtask_prediction=True,
+            sample_subtask_prediction=True,
+            subtask_loss_weight=0.1,
+            max_subtask_len=30,
+            subtask_classification=True,
+            num_subtask_classes=13,
+            subtask_class_loss_weight=0.2,
+        ),
+        data=LeRobotZerithJointDataConfig(
+            repo_id="hewu2008/part_sorting_20261027_subtask",
+            assets=AssetsConfig(
+                assets_dir="./assets",
+                asset_id="hewu2008/part_sorting_20261027_clean",
+            ),
+            base_config=DataConfig(
+                local_files_only=True,
+                prompt_from_task=True,
+            ),
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            # Low peak lr: only the ~1M-parameter head is randomly initialized, the rest is already converged.
+            warmup_steps=200,
+            peak_lr=1e-5,
+            decay_steps=8000,
+            decay_lr=1e-6,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "openpi_checkpoints/pi05_zerith_subtask/"
+            "part_sorting_20261027_subtask_60k_lr2.5e-5_bs8_ah50_pi05_lora/59999/params",
+            missing_regex=".*lora.*|.*subtask_classifier.*",
+        ),
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_horizon=50, action_expert_variant="gemma_300m"
+        ).get_freeze_filter(),
+        ema_decay=0.999,
+        checkpoint_base_dir="./openpi_checkpoints",
+        batch_size=16,
+        log_interval=1,
+        save_interval=2000,
+        num_train_steps=8000,
     ),
 ]
 

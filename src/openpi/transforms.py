@@ -349,8 +349,17 @@ class SubtaskFromIndex(DataTransformFn):
     def __call__(self, data: DataDict) -> DataDict:
         # The key is always set (empty string when the frame has no annotation) so that the repack whitelist can
         # rely on it, and so that the tokenizer can tell a training batch from a serving request.
+        # `subtask_class` is the integer label of the same frame (used by the subtask classification head), with
+        # -1 marking "no (known) annotation" so the classification loss can ignore it.
         index = data.get("subtask_index")
-        return {**data, "subtask": "" if index is None else self.subtasks.get(int(index), "")}
+        class_id = -1 if index is None else int(index)
+        if class_id not in self.subtasks:
+            class_id = -1
+        return {
+            **data,
+            "subtask": self.subtasks.get(class_id, ""),
+            "subtask_class": np.int32(class_id),
+        }
 
 
 @dataclasses.dataclass(frozen=True)

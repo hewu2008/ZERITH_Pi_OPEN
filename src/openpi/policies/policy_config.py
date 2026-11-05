@@ -38,6 +38,8 @@ def create_trained_policy(
     default_prompt: str | None = None,
     norm_stats: dict[str, transforms.NormStats] | None = None,
     rtc_config: _rtc_policy.RTCServerConfig | None = None,
+    subtask_classes: Sequence[str] | None = None,
+    subtask_mode: str | None = None,
 ) -> _policy.Policy:
     """Create a policy from a trained checkpoint.
 
@@ -53,6 +55,9 @@ def create_trained_policy(
             from the checkpoint directory.
         rtc_config: If set, wrap the policy with Real-Time Chunking guidance (see
             `openpi.policies.rtc_policy`). Default `None` keeps the plain policy.
+        subtask_classes: Subtask texts ordered by class index, required in classifier mode.
+        subtask_mode: "classifier" (one prefix forward + classification head) or "generate" (autoregressive
+            subtask text). Default `None` picks the fastest stage the model supports.
     """
     repack_transforms = repack_transforms or transforms.Group()
     checkpoint_dir = download.maybe_download(str(checkpoint_dir))
@@ -82,10 +87,12 @@ def create_trained_policy(
         *repack_transforms.outputs,
     ]
 
-    # pi0.5 staged inference needs the tokenizer to turn the generated subtask ids back into text.
+    # pi0.5 staged inference needs the tokenizer to turn the generated subtask ids back into text. The classifier
+    # head reads out the same layout, so build it whenever either subtask stage is enabled.
     subtask_tokenizer = (
         _tokenizer.PaligemmaTokenizer(train_config.model.max_token_len)
-        if getattr(model, "sample_subtask_prediction", False)
+        if getattr(train_config.model, "train_subtask_prediction", False)
+        or getattr(train_config.model, "sample_subtask_prediction", False)
         else None
     )
 
@@ -98,6 +105,8 @@ def create_trained_policy(
             sample_kwargs=sample_kwargs,
             metadata=train_config.policy_metadata,
             subtask_tokenizer=subtask_tokenizer,
+            subtask_classes=subtask_classes,
+            subtask_mode=subtask_mode,
         )
 
     return _policy.Policy(
@@ -107,4 +116,6 @@ def create_trained_policy(
         sample_kwargs=sample_kwargs,
         metadata=train_config.policy_metadata,
         subtask_tokenizer=subtask_tokenizer,
+        subtask_classes=subtask_classes,
+        subtask_mode=subtask_mode,
     )

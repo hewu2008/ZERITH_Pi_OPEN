@@ -157,9 +157,19 @@ def train_step(
     def loss_fn(
         model: _model.BaseModel, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions
     ):
-        action_loss, subtask_loss = model.compute_loss_terms(rng, observation, actions, train=True)
-        total_loss = action_loss + getattr(model, "subtask_loss_weight", 0.0) * subtask_loss[:, None]
-        return jnp.mean(total_loss), {"flow_loss": jnp.mean(action_loss), "ce_loss": jnp.mean(subtask_loss)}
+        action_loss, subtask_loss, subtask_class_loss = model.compute_loss_terms(
+            rng, observation, actions, train=True
+        )
+        total_loss = action_loss
+        if getattr(model, "train_subtask_prediction", False):
+            total_loss = total_loss + getattr(model, "subtask_loss_weight", 0.0) * subtask_loss[:, None]
+        if getattr(model, "subtask_classification", False):
+            total_loss = total_loss + getattr(model, "subtask_class_loss_weight", 0.0) * subtask_class_loss[:, None]
+        return jnp.mean(total_loss), {
+            "flow_loss": jnp.mean(action_loss),
+            "ce_loss": jnp.mean(subtask_loss),
+            "cls_loss": jnp.mean(subtask_class_loss),
+        }
 
     train_rng = jax.random.fold_in(rng, state.step)
     observation, actions = batch
@@ -201,6 +211,7 @@ def train_step(
         "loss": loss,
         "flow_loss": aux["flow_loss"],
         "ce_loss": aux["ce_loss"],
+        "cls_loss": aux["cls_loss"],
         "grad_norm": optax.global_norm(grads),
         "param_norm": optax.global_norm(kernel_params),
         "lr": config.lr_schedule.create()(state.step),

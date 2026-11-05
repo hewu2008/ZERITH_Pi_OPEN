@@ -104,6 +104,8 @@ class RTCPolicy(_policy.Policy):
         sample_kwargs: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
         subtask_tokenizer: _tokenizer.PaligemmaTokenizer | None = None,
+        subtask_classes: Sequence[str] | None = None,
+        subtask_mode: str | None = None,
     ):
         if not hasattr(model, "guided_sample_actions"):
             raise TypeError(f"Model {type(model).__name__} does not support RTC (no guided_sample_actions).")
@@ -114,6 +116,8 @@ class RTCPolicy(_policy.Policy):
             sample_kwargs=sample_kwargs,
             metadata=metadata,
             subtask_tokenizer=subtask_tokenizer,
+            subtask_classes=subtask_classes,
+            subtask_mode=subtask_mode,
         )
         self._model = model
         self._rtc_config = rtc_config
@@ -236,16 +240,11 @@ class RTCPolicy(_policy.Policy):
         weights = _rtc.rtc_weights(d, s, horizon, prev_len=prev_len)
 
         observation = _model.Observation.from_dict(inputs)
-        subtask_text = None
-        if self._sample_subtask is None:
-            self._rng, sample_rng = jax.random.split(self._rng)
-        else:
-            # Staged inference composes with RTC: the generated subtask conditions the guided sampler below.
-            self._rng, subtask_rng, sample_rng = jax.random.split(self._rng, 3)
-            observation, subtask_tokens, subtask_mask = self._sample_subtask(
-                subtask_rng, observation, temperature=self._subtask_temperature
-            )
-            subtask_text = self._decode_subtask(subtask_tokens, subtask_mask)
+        # Staged inference composes with RTC: the predicted/generated subtask conditions the guided sampler below.
+        # Reuse the inputs just built (they already carry the re-encoded leftover) so the transforms run once.
+        inputs, observation, sample_rng, subtask_text, subtask_source = self._run_subtask_stage(
+            obs, prepared=(inputs, observation)
+        )
 
         actions = self._guided_sample_actions(
             sample_rng,
@@ -264,4 +263,5 @@ class RTCPolicy(_policy.Policy):
         result = self._finalize_outputs(outputs)
         if subtask_text is not None:
             result["subtask"] = subtask_text
+            result["subtask_source"] = subtask_source
         return result
