@@ -18,5 +18,5 @@ python scripts/open_loop_eval_remote.py \
   --max_infer_time 240 \
   --action_horizon 30 \
   --default_prompt "Sort all objects into the correct bins using both arms" \
-  --save_plot_path ./open_loop_test/subtask_59999_remote/ \
+  --save_plot_path ./open_loop_test/subtask_cls_15999_remote/ \
   2>&1 | tee -a logs/open_loop_eval_remote.log
