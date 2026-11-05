@@ -20,6 +20,7 @@ import openpi.models.tokenizer as _tokenizer
 import openpi.policies.zerith_joint_policy as zerith_joint_policy
 
 import openpi.shared.download as _download
+import openpi.shared.nnx_utils as nnx_utils
 import openpi.shared.normalize as _normalize
 import openpi.training.optimizer as _optimizer
 import openpi.training.weight_loaders as weight_loaders
@@ -589,23 +590,31 @@ _CONFIGS = [
             ),
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            # Low peak lr: only the ~1M-parameter head is randomly initialized, the rest is already converged.
+            # The head is randomly initialized and the backbone is frozen, so it can use a normal Adam lr; the
+            # converged 60k-step weights are never updated.
             warmup_steps=200,
-            peak_lr=1e-5,
+            peak_lr=1e-3,
             decay_steps=8000,
-            decay_lr=1e-6,
+            decay_lr=1e-4,
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader(
             "openpi_checkpoints/pi05_zerith_subtask/"
             "part_sorting_20261027_subtask_60k_lr2.5e-5_bs8_ah50_pi05_lora/59999/params",
             missing_regex=".*lora.*|.*subtask_classifier.*",
         ),
-        freeze_filter=pi0_config.Pi0Config(
-            paligemma_variant="gemma_2b_lora", action_horizon=50, action_expert_variant="gemma_300m"
-        ).get_freeze_filter(),
+        # Only train the classification head: freeze the whole backbone (including the already-converged LoRA and the
+        # action expert) so these 8k steps cannot degrade the 60k-step policy, and so no gradients / optimizer state
+        # are allocated for the ~2B parameters.
+        freeze_filter=nnx.All(
+            nnx.Param,
+            nnx.Not(nnx_utils.PathRegex(r".*subtask_classifier.*")),
+        ),
         ema_decay=0.999,
         checkpoint_base_dir="./openpi_checkpoints",
         batch_size=8,
+        # Shard params / gradients / optimizer state across both GPUs (mesh = (1, 2)). Without this the default is
+        # `fsdp_devices=1`, which replicates the full ~7.9 GiB checkpoint on every GPU and runs out of memory.
+        fsdp_devices=1,
         log_interval=1,
         save_interval=2000,
         num_train_steps=8000,
