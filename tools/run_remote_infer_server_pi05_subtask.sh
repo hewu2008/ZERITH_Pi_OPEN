@@ -18,6 +18,7 @@ export LEROBOT_HOME=/data/4T-2/dataset/
 
 export HF_HUB_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
+export JAX_LOG_COMPILES=1
 
 mkdir -p logs
 

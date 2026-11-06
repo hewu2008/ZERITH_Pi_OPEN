@@ -14,7 +14,7 @@
 # hdf5: c066a2e76fdd4f299af074f79cd8bc04
 
 sudo /home/robot/miniconda3/envs/lingbot-va/bin/python robot_infer/scripts/test_pi0.py \
-  --host 10.42.0.1 \
+  --host 172.31.200.200 \
   --port 55555 \
   --no_pin_head \
   --num_steps 864000 \
