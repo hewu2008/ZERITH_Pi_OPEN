@@ -420,7 +420,7 @@ def main(args):
         if args.pin_head:
             pin_head_action(action, data_action)
 
-        logging.info("action: %s", action)
+        logging.info("action: %s", np.array2string(action, precision=3, suppress_small=True, separator=","))
         env._set_joint_action(action[:-2])
 
         result_age = worker.last_result_age()
