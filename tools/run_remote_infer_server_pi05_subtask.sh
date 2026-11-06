@@ -26,6 +26,7 @@ python scripts/remote_infer_server.py \
   --policy.dir openpi_checkpoints/pi05_zerith_subtask_cls/part_sorting_20261027_subtask_cls_headlr1e-3_16k_lr1e-5_bs8/15999 \
   --default-prompt "Sort all objects into the correct bins using both arms" \
   --subtask.mode classifier \
+  --subtask.jsonl assets/subtasks.jsonl \
   --port 55555 \
   --rtc.s_min 18 \
   2>&1 | tee -a logs/remote_infer_server_pi05_subtask.log
