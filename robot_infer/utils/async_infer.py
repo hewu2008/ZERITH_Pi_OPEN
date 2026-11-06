@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import threading
 import time
@@ -20,6 +22,8 @@ class InferenceWorker(threading.Thread):
         self._stop_event = threading.Event()
         self._pending_obs = None  # (query_t, obs) awaiting inference
         self._result = None  # latest unconsumed (query_t, actions)
+        self._subtask = None  # high-level subtask of the latest successful infer (None if the server has none)
+        self._subtask_seq = 0  # incremented per successful infer, so consumers can deduplicate chunks
         self._last_result_time = None  # monotonic time of the last successful infer
         self._in_flight = False  # True while a submitted observation is being inferred
         self._consecutive_failures = 0
@@ -47,6 +51,26 @@ class InferenceWorker(threading.Thread):
             result = self._result
             self._result = None
             return result
+
+    def latest_subtask(self) -> tuple[str | None, int]:
+        """High-level subtask of the latest successful infer, with a per-chunk sequence number.
+
+        The sequence number lets a consumer count each chunk exactly once even though it polls the same
+        value on every control step.
+        """
+        with self._lock:
+            return self._subtask, self._subtask_seq
+
+    def drain(self) -> int:
+        """Discard finished-but-unconsumed results and return how many were dropped.
+
+        Used around blocking phases (e.g. driving the arms to the home pose) so chunks computed from the
+        pre-phase image cannot be merged into the action queue afterwards.
+        """
+        dropped = 0
+        while self.poll() is not None:
+            dropped += 1
+        return dropped
 
     def last_result_age(self):
         """Seconds since the last successful inference, or None if none yet."""
@@ -95,6 +119,7 @@ class InferenceWorker(threading.Thread):
             try:
                 response = self._client.infer(observation)
                 actions = response["actions"]
+                subtask = response.get("subtask")  # absent when the server runs without a subtask stage
             except Exception as exc:
                 self._consecutive_failures += 1
                 with self._lock:
@@ -110,6 +135,8 @@ class InferenceWorker(threading.Thread):
             self._consecutive_failures = 0
             with self._lock:
                 self._result = (query_t, actions)
+                self._subtask = subtask
+                self._subtask_seq += 1
                 self._last_result_time = time.monotonic()
                 self._in_flight = False
                 self._infer_times.append(elapsed)
@@ -117,11 +144,17 @@ class InferenceWorker(threading.Thread):
 
 
 def run_rtc_loop(step_fn, freq: float, num_steps: int) -> None:
-    """Drive `step_fn(step)` at a fixed frequency on an absolute deadline schedule."""
+    """Drive `step_fn(step)` at a fixed frequency on an absolute deadline schedule.
+
+    A truthy return from `step_fn` means the step ran a blocking phase (e.g. the home-pose return) that
+    consumed the schedule; the deadline is then rebased instead of bursting through the missed periods.
+    """
     period = 1.0 / freq
     next_deadline = time.monotonic() + period
     for step in range(num_steps):
-        step_fn(step)
+        if step_fn(step):
+            next_deadline = time.monotonic() + period
+            continue
         delay = next_deadline - time.monotonic()
         if delay > 0:
             time.sleep(delay)

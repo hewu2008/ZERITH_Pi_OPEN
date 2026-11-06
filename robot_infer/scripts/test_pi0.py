@@ -1,4 +1,5 @@
 import argparse
+import json
 import logging
 import os
 import subprocess
@@ -28,10 +29,30 @@ from utils.async_infer import run_rtc_loop
 from utils.real_env_sdk import make_real_env
 from utils.rtc_client import RTCScheduler
 from utils.rtc_client import validate_server_metadata
+from utils.subtask_home_guard import HOME_SUBTASK
+from utils.subtask_home_guard import HomeSubtaskGuard
 
 
 DEFAULT_PROMPT = "grab all the ducks and put them into the basket"
 FIRST_CHUNK_TIMEOUT = 30.0
+
+
+def load_home_subtask(path: str, index: int = 0) -> str:
+    """Read the `subtask_index == index` text out of a subtask class table.
+
+    Falls back to the built-in home text (with a warning) so a missing table cannot stop a run on the robot.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                record = json.loads(line)
+                if int(record["subtask_index"]) == index:
+                    return str(record["subtask"])
+    except FileNotFoundError:
+        logging.warning("Subtask class table %s not found; using built-in home text", path)
+        return HOME_SUBTASK
+    logging.warning("No subtask_index=%d row in %s; using built-in home text", index, path)
+    return HOME_SUBTASK
 
 
 def camera_aliases(camera_name: str) -> list[str]:
@@ -121,6 +142,16 @@ class ActionSmooth:
             return
         self.worker.submit(observation, query_t=self.t)
         self._submitted_ts.add(self.t)
+
+    def reset(self) -> None:
+        """Drop the chunks collected before a blocking phase (e.g. the home-pose return).
+
+        Without this the exponential smoothing would blend those pre-phase actions back into the first
+        post-phase steps.
+        """
+        self.all_time_actions.fill(0.0)
+        self._submitted_ts.clear()
+        self.t = 0
 
     def _consume_results(self) -> None:
         while True:
@@ -303,6 +334,20 @@ def main(args):
         time.sleep(4)
         logging.info("Loaded initialization action: %s", data_action)
 
+    # The home subtask means "this round is finished, bring both arms back": once it is predicted
+    # repeatedly, drive the arms to the initialization frame ourselves instead of trusting the policy.
+    home_guard = None
+    home_pose = None
+    if args.home_recovery and args.subtask_mode != "off" and data_action is not None:
+        home_text = HOME_SUBTASK
+        if args.subtask_jsonl:
+            home_text = load_home_subtask(args.subtask_jsonl)
+        home_guard = HomeSubtaskGuard(home_text, consecutive=args.home_consecutive)
+        home_pose = data_action[:-2].copy()
+        logging.info(
+            "Home recovery armed: text=%r consecutive=%d", home_guard.home_text, home_guard.consecutive
+        )
+
     logging.info("Paused before inference. Adjust the robot, then continue from pdb to start policy control.")
     import pdb
 
@@ -324,8 +369,31 @@ def main(args):
 
     gripper = GripperHysteresis()
     recorded_actions = [] if args.save_actions else None
+    last_logged_subtask = [None]
 
     def control_step(step):
+        # The subtask is attached to every inference response; log phase changes and watch for home.
+        if args.subtask_mode != "off":
+            subtask, subtask_seq = worker.latest_subtask()
+            if subtask != last_logged_subtask[0]:
+                last_logged_subtask[0] = subtask
+                logging.info("subtask: %s", subtask)
+            if home_guard is not None and home_guard.observe(subtask, subtask_seq):
+                logging.warning(
+                    "Home subtask predicted %d times in a row -> returning to the init pose",
+                    home_guard.consecutive,
+                )
+                # Chunks computed before/while driving home describe the pre-home pose; merging them
+                # would yank the arms back, so drain them and reset all chunk bookkeeping.
+                worker.drain()
+                env.move_to_target_joint(home_pose)
+                worker.drain()
+                if scheduler is not None:
+                    scheduler.reset()
+                else:
+                    action_smooth.reset()
+                return True  # blocking phase: let the control loop rebase its deadline
+
         observation = env.get_observation().observation
         observation["state"] = observation["qpos"]
         observation = prepare_observation(observation, openpi_client, args.camera_names, args.prompt)
@@ -428,6 +496,35 @@ if __name__ == "__main__":
         default=15,
         help="minimum execution horizon in control steps (RTC only; paper constraint d <= s <= H - d)",
     )
+    parser.add_argument(
+        "--subtask.mode",
+        dest="subtask_mode",
+        type=str,
+        choices=["classifier", "generate", "off"],
+        default="classifier",
+        help="consume the subtask returned by the server; 'off' keeps the legacy actions-only behavior",
+    )
+    parser.add_argument(
+        "--subtask.jsonl",
+        dest="subtask_jsonl",
+        type=str,
+        default=None,
+        help="subtask class table used to resolve the home class text (defaults to the built-in text)",
+    )
+    parser.add_argument(
+        "--home_consecutive",
+        type=int,
+        default=3,
+        help="number of consecutive home-subtask predictions before returning to the init pose",
+    )
+    parser.add_argument(
+        "--home_recovery",
+        dest="home_recovery",
+        action="store_true",
+        default=True,
+        help="return to the init pose after a sustained home-subtask phase",
+    )
+    parser.add_argument("--no_home_recovery", dest="home_recovery", action="store_false")
     parser.add_argument(
         "--camera_names",
         nargs="+",
