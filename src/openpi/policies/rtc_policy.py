@@ -31,7 +31,6 @@ import time
 from typing import Any
 from collections.abc import Sequence
 
-import jax
 import numpy as np
 
 from typing_extensions import override
@@ -40,7 +39,6 @@ from openpi.models import model as _model
 from openpi.models import rtc as _rtc
 from openpi.models import tokenizer as _tokenizer
 from openpi.policies import policy as _policy
-from openpi.shared import array_typing as at
 from openpi.shared import nnx_utils
 from openpi import transforms as _transforms
 
@@ -159,11 +157,14 @@ class RTCPolicy(_policy.Policy):
 
         `fake_obs` must be shaped like the server's `_build_observation` output
         (raw camera images, proprioceptive state and a prompt); it never touches
-        real robot state. The guided warmup uses a zero leftover with an
-        all-zero weight schedule (a mathematical no-op) so the compiled graph
-        is exactly the one used at serving time. Both calls are timed and
-        synchronized so the reported numbers reflect real compile cost and the
-        first client request cannot hit a JIT compile storm.
+        real robot state. Both paths go through `infer`, so the graphs compiled
+        here are exactly the ones serving hits: the plain path (no leftover)
+        and the guided path (non-empty `rtc` payload, which also compiles the
+        leftover re-encode and the staged subtask pass). Driving the guided
+        sampler directly used to miss the serving trace key and the first RTC
+        request of an episode paid the XLA compile again (~13s). Both calls are
+        timed and synchronized so the reported numbers reflect real compile
+        cost and the first client request cannot hit a JIT compile storm.
         """
         if self._rtc_config.mode == "off":
             return
@@ -173,25 +174,21 @@ class RTCPolicy(_policy.Policy):
         # Plain path: every episode's first chunk has no leftover and goes
         # through `super().infer` unchanged.
         start = time.perf_counter()
-        super().infer(dict(fake_obs))
+        self.infer(dict(fake_obs))
         logger.info("RTC warmup: plain sampler compiled in %.1fs", time.perf_counter() - start)
 
+        # Guided path: hand `infer` a real leftover so it runs the same
+        # re-encode + subtask stage + guided sampler as the first post-reset
+        # chunk of an episode.
         horizon, dim = self._model.action_horizon, self._model.action_dim
-        prev = np.zeros((1, horizon, dim), dtype=np.float32)
-        weights = np.zeros(horizon, dtype=np.float32)
-        obs = self._prepare_inputs(fake_obs)
-        self._rng, sample_rng = jax.random.split(self._rng)
+        rtc = {
+            "version": _rtc.RTC_PROTOCOL_VERSION,
+            "prev_chunk_left_over": np.zeros((horizon, dim), dtype=np.float32),
+            "inference_delay": 0,
+            "execution_horizon": self._rtc_config.s_min,
+        }
         start = time.perf_counter()
-        actions = self._guided_sample_actions(
-            sample_rng,
-            _model.Observation.from_dict(obs),
-            prev,
-            weights,
-            beta=self._rtc_config.beta,
-            num_steps=self._rtc_config.num_steps,
-            guidance_steps=self._rtc_config.jit_guidance_steps,
-        )
-        jax.block_until_ready(actions)
+        self.infer({**fake_obs, "rtc": rtc})
         logger.info("RTC warmup: guided sampler compiled in %.1fs", time.perf_counter() - start)
 
     @override

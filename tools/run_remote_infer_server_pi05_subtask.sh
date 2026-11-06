@@ -18,7 +18,7 @@ export LEROBOT_HOME=/data/4T-2/dataset/
 
 export HF_HUB_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
-export JAX_LOG_COMPILES=1
+export JAX_LOG_COMPILES=0
 
 mkdir -p logs
 
@@ -30,4 +30,4 @@ python scripts/remote_infer_server.py \
   --subtask.jsonl assets/subtasks.jsonl \
   --port 55555 \
   --rtc.s_min 18 \
-  2>&1 | tee -a logs/remote_infer_server_pi05_subtask.log
+  2>&1 | tee logs/remote_infer_server_pi05_subtask.log
