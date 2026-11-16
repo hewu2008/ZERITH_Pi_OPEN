@@ -87,6 +87,7 @@ class SubtaskArgs:
     """Settings for the pi0.5 high-level subtask stage."""
 
     # "classifier" (default): one prefix forward + a fixed-class head, then the subtask text is looked up;
+    # None/"none"/"off": plain policy, no subtask stage; "off" matches the robot client's spelling;
     # "generate": autoregressive subtask text, the original slower path kept for A/B comparisons.
     mode: str = "classifier"
     # Class table path; defaults to `$LEROBOT_HOME/<repo_id>/meta/subtasks.jsonl` of the training config.
@@ -147,20 +148,25 @@ def create_policy(args: Args) -> _policy.Policy:
             guidance_steps=args.rtc.guidance_steps,
             s_min=args.rtc.s_min,
         )
+    subtask_mode = args.subtask.mode
+    if subtask_mode in (None, "", "none", "off"):
+        subtask_mode = None
     subtask_classes = None
-    if args.subtask.mode == "classifier":
+    if subtask_mode == "classifier":
         subtask_path = _resolve_subtask_jsonl(args.subtask.jsonl, train_config)
         subtask_classes = _load_subtask_classes(subtask_path)
         logging.info("Subtask classifier enabled with %d classes from %s", len(subtask_classes), subtask_path)
+    elif subtask_mode == "generate":
+        logging.info("Subtask mode: %s (autoregressive generation)", subtask_mode)
     else:
-        logging.info("Subtask mode: %s (autoregressive generation)", args.subtask.mode)
+        logging.info("Subtask stage disabled: serving plain pi0.5 actions")
     return _policy_config.create_trained_policy(
         train_config,
         args.policy.dir,
         default_prompt=args.default_prompt,
         rtc_config=rtc_config,
         subtask_classes=subtask_classes,
-        subtask_mode=args.subtask.mode,
+        subtask_mode=subtask_mode,
     )
 
 
