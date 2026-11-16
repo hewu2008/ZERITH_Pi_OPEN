@@ -20,7 +20,7 @@ mkdir -p logs
 
 python scripts/remote_infer_server.py \
   --policy.config pi05_zerith \
-  --policy.dir /data/4T-1/zhangrui/ckpt/train_part_sorting/experiments_n/20500 \
+  --policy.dir /home/jszn/hewu/model_zoo/20500 \
   --default-prompt "Sort all objects into the correct bins using both arms" \
   --subtask.mode none \
   --port 55555 \
