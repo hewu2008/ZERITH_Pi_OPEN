@@ -24,4 +24,5 @@ python scripts/remote_infer_server.py \
   --default-prompt "Sort all objects into the correct bins using both arms" \
   --subtask.mode none \
   --port 55555 \
+  --rtc.s_min 18 \
   2>&1 | tee -a logs/remote_infer_server_pi05.log
