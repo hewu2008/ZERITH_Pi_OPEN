@@ -195,6 +195,10 @@ class RTCPolicy(_policy.Policy):
     def infer(self, obs: dict) -> dict:  # type: ignore[misc]
         rtc_info = obs.pop("rtc", None)
         if rtc_info is None or self._rtc_config.mode == "off":
+            # Only the first chunk of an episode (or a client without RTC) lands
+            # here, so keep it at debug: one line per episode is enough to tell
+            # a plain request apart from a guided one.
+            logger.debug("RTC: plain path (rtc=%s mode=%s)", rtc_info is not None, self._rtc_config.mode)
             return super().infer(obs)
 
         horizon = self._model.action_horizon
@@ -203,6 +207,7 @@ class RTCPolicy(_policy.Policy):
         prev = rtc_info.get("prev_chunk_left_over")
         if prev is None or len(prev) == 0:
             # No leftover (e.g. first chunk after a queue clear): plain path.
+            logger.debug("RTC: plain path (empty leftover)")
             return super().infer(obs)
 
         d = int(rtc_info.get("inference_delay", 0))
@@ -235,6 +240,21 @@ class RTCPolicy(_policy.Policy):
         prev_padded[0, :prev_len, : prev_model.shape[1]] = prev_model[:prev_len]
 
         weights = _rtc.rtc_weights(d, s, horizon, prev_len=prev_len)
+        # One line per guided request (the RTC client refills every `s_min`
+        # steps, so this is ~1.7 lines/s at 30 Hz), enough to see whether
+        # guidance is live and how much of the prefix is actually frozen.
+        logger.info(
+            "RTC: mode=%s d=%d s=%d T_prev=%d H=%d frozen<=%d soft=%d beta=%.1f steps=%d",
+            self._rtc_config.mode,
+            d,
+            s,
+            prev_len,
+            horizon,
+            int((weights == 1.0).sum()),
+            int(((weights > 0.0) & (weights < 1.0)).sum()),
+            self._rtc_config.beta,
+            self._rtc_config.jit_guidance_steps,
+        )
 
         observation = _model.Observation.from_dict(inputs)
         # Staged inference composes with RTC: the predicted/generated subtask conditions the guided sampler below.
